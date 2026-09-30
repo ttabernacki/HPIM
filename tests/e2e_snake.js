@@ -1,4 +1,4 @@
-// Headless-browser playtest for snake/index.html.
+// Headless-browser playtest of the real page (snake/index.html).
 // Run: NODE_PATH=$(npm root -g) node tests/e2e_snake.js
 const { chromium } = require("playwright");
 const path = require("path");
@@ -7,8 +7,9 @@ const assert = require("assert");
 const URL = "file://" + path.resolve(__dirname, "..", "snake", "index.html");
 const results = [];
 async function t(name, fn) {
-  try { await fn(); results.push(["ok", name]); }
-  catch (e) { results.push(["FAIL", name + ": " + e.message]); }
+  const t0 = Date.now();
+  try { await fn(); results.push(["ok", name]); console.log("  ok  ", name, `(${Date.now() - t0}ms)`); }
+  catch (e) { results.push(["FAIL", name + ": " + e.message.split("\n")[0]]); console.log(" FAIL ", name, "::", e.message.split("\n")[0]); }
 }
 
 (async () => {
@@ -16,164 +17,205 @@ async function t(name, fn) {
     executablePath: process.env.CHROMIUM_PATH || "/opt/pw-browsers/chromium",
     args: ["--no-sandbox"],
   });
-  const page = await browser.newPage({ viewport: { width: 520, height: 800 } });
   const errors = [];
-  page.on("pageerror", e => errors.push(e.message));
-  page.on("console", m => m.type() === "error" && errors.push(m.text()));
-  await page.goto(URL);
+  async function open(opts = {}) {
+    const ctx = await browser.newContext(Object.assign({ viewport: { width: 760, height: 900 } }, opts));
+    const page = await ctx.newPage();
+    page.on("pageerror", e => errors.push(e.message));
+    page.on("console", m => m.type() === "error" && errors.push(m.text()));
+    await page.goto(URL);
+    await page.waitForFunction(() => window.__echo);
+    return { ctx, page };
+  }
+  const E = (page, fn, arg) => page.evaluate(fn, arg);
+  // Stop real-time ticking so tests advance the game deterministically.
+  const freeze = page => E(page, () => { const g = window.__echo.run().g; g.P.baseMs = g.P.minMs = 1e9; });
+  const tick = (page, n = 1) => E(page, n => { const e = window.__echo; for (let i = 0; i < n; i++) e.doTick(e.run(), true); }, n);
+  const screen = page => E(page, () => window.__echo.app.screen);
 
-  // Freeze the real-time loop so tests drive ticks deterministically.
-  const G = fn => page.evaluate(fn);
-  await G(() => { window.__snake.state().paused = true; });
-  const fresh = () => G(() => { window.__snake.reset(); window.__snake.state().paused = false; });
+  let { ctx, page } = await open();
 
-  await t("loads with a 3-long snake, echo delay 24, one blink charge", async () => {
-    await fresh();
-    const s = await G(() => { const S = window.__snake.state(); return { len: S.snake.length, d: S.delay, c: S.charges, alive: S.alive }; });
-    assert.deepStrictEqual(s, { len: 3, d: 24, c: 1, alive: true });
+  await t("title screen shows and the attract-mode demo plays by itself", async () => {
+    assert.strictEqual(await screen(page), "title");
+    assert.ok(await page.isVisible("#ov-title"));
+    const a = await E(page, () => window.__echo.app.demo.g.ticks);
+    await page.waitForTimeout(900);
+    const b = await E(page, () => window.__echo.app.demo.g.ticks);
+    assert.ok(b > a, `demo ticks ${a} -> ${b}`);
   });
 
-  await t("moves right and wraps around the board", async () => {
-    await fresh();
-    const x = await G(() => { const S = window.__snake.state(); S.food = { x: 0, y: 0 };
-      for (let i = 0; i < 12; i++) window.__snake.step(); return S.snake[0].x; });
-    assert.strictEqual(x, 2); // 10 -> wraps past 19 -> 0 -> 2
-  });
-
-  await t("eating food grows the snake, scores 10, shrinks the echo delay", async () => {
-    await fresh();
-    const r = await G(() => { const S = window.__snake.state(); S.food = { x: 11, y: 10 };
-      window.__snake.step(); return { len: S.snake.length, score: S.score, delay: S.delay }; });
-    assert.deepStrictEqual(r, { len: 4, score: 10, delay: 23 });
-  });
-
-  await t("delay never drops below the minimum", async () => {
-    await fresh();
-    const d = await G(() => { const S = window.__snake.state(); S.delay = 10; S.food = { x: 11, y: 10 };
-      window.__snake.step(); return S.delay; });
-    assert.strictEqual(d, 10);
-  });
-
-  await t("cannot reverse directly into itself", async () => {
-    await fresh();
-    const alive = await G(() => { window.__snake.turn(-1, 0); window.__snake.step(); return window.__snake.state().alive; });
-    assert.ok(alive);
-  });
-
-  await t("hitting your own body kills you", async () => {
-    await fresh();
-    const alive = await G(() => { const S = window.__snake.state();
-      S.snake = [{x:5,y:5},{x:5,y:6},{x:6,y:6},{x:6,y:5},{x:6,y:4},{x:5,y:4},{x:4,y:4}]; S.dir = {x:0,y:-1}; S.food = {x:0,y:0};
-      window.__snake.step(); return S.alive; });
-    assert.strictEqual(alive, false);
-  });
-
-  await t("moving into the cell the tail is vacating is safe", async () => {
-    await fresh();
-    const alive = await G(() => { const S = window.__snake.state();
-      S.snake = [{x:5,y:5},{x:5,y:6},{x:6,y:6},{x:6,y:5},{x:6,y:4},{x:5,y:4}]; S.dir = {x:0,y:-1}; S.food = {x:0,y:0};
-      window.__snake.step(); return S.alive; });
-    assert.strictEqual(alive, true);
-  });
-
-  await t("the echo replays your path and kills on contact", async () => {
-    await fresh();
-    // Walk a small loop long enough that the echo trails right behind the head's next cell.
-    const r = await G(() => {
-      const S = window.__snake.state(); S.food = { x: 0, y: 0 };
-      S.delay = 6; S.snake = [{x:10,y:10},{x:9,y:10},{x:8,y:10}]; S.dir = {x:1,y:0};
-      S.hist = []; for (let x = 4; x <= 10; x++) S.hist.push({x, y: 10});      // path so far, ends at head
-      for (let x = 10; x >= 7; x--) S.hist.push({x, y: 10});                    // (synthetic history)
-      S.hist.push({x: 10, y: 10});
-      const g = window.__snake.ghostCells();
-      return { ghostLen: g.length, ghostHead: g[0] };
+  await t("canvas actually draws (not blank) and HUD is present", async () => {
+    const lit = await E(page, () => {
+      const c = document.getElementById("cv"), d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let n = 0; for (let i = 0; i < d.length; i += 4 * 37) if (d[i] + d[i + 1] + d[i + 2] > 120) n++;
+      return n;
     });
-    assert.strictEqual(r.ghostLen, 3);
-    // Now place the ghost head directly ahead of the snake and step into it.
-    const died = await G(() => {
-      const S = window.__snake.state(); S.food = { x: 0, y: 0 };
-      S.snake = [{x:2,y:2},{x:1,y:2},{x:0,y:2}]; S.dir = {x:1,y:0}; S.delay = 4;
-      S.hist = [{x:3,y:2},{x:9,y:9},{x:9,y:9},{x:9,y:9},{x:9,y:9},{x:2,y:2}];  // hist[end-4] = (3,2) = cell ahead
-      window.__snake.step(); return { alive: S.alive, msg: document.getElementById("status").textContent };
-    });
-    assert.strictEqual(died.alive, false);
-    assert.match(died.msg, /echo/i);
+    assert.ok(lit > 20, "bright pixels: " + lit);
   });
 
-  await t("blink teleports the head onto the echo head and spends a charge", async () => {
-    await fresh();
-    const r = await G(() => {
-      const S = window.__snake.state(); S.food = { x: 0, y: 0 };
-      S.snake = [{x:2,y:2},{x:1,y:2},{x:0,y:2}]; S.delay = 4;
-      S.hist = [{x:15,y:15},{x:9,y:9},{x:9,y:9},{x:9,y:9},{x:9,y:9},{x:2,y:2}];  // echo head = hist[len-1-4] = (9,9)
-      const ok = window.__snake.blink();
-      return { ok, head: S.snake[0], charges: S.charges };
-    });
-    assert.deepStrictEqual(r, { ok: true, head: { x: 9, y: 9 }, charges: 0 });
-  });
-
-  await t("blink is refused with no charges, and when the echo overlaps your body", async () => {
-    await fresh();
-    const r = await G(() => {
-      const S = window.__snake.state(); S.food = { x: 0, y: 0 };
-      S.snake = [{x:2,y:2},{x:1,y:2},{x:0,y:2}]; S.delay = 4;
-      S.hist = [{x:15,y:15},{x:1,y:2},{x:1,y:2},{x:1,y:2},{x:1,y:2},{x:2,y:2}];  // echo head on own body
-      const overlap = window.__snake.blink(), c1 = S.charges;
-      S.hist[S.hist.length - 1 - S.delay] = { x: 9, y: 9 }; S.charges = 0;
-      const none = window.__snake.blink();
-      return { overlap, c1, none };
-    });
-    assert.deepStrictEqual(r, { overlap: false, c1: 1, none: false });
-  });
-
-  await t("a blink charge is earned every 4 foods, capped at 3", async () => {
-    await fresh();
-    const c = await G(() => { const S = window.__snake.state(); S.delay = 24;
-      for (let i = 0; i < 12; i++) { const h = S.snake[0]; S.food = { x: (h.x + S.dir.x + 20) % 20, y: h.y }; window.__snake.step(); }
-      return S.charges; });
-    assert.strictEqual(c, 3);
-  });
-
-  await t("food never spawns on the snake or the echo", async () => {
-    await fresh();
-    const bad = await G(() => { const S = window.__snake.state();
-      S.hist = []; for (let i = 0; i < 60; i++) S.hist.push({ x: i % 20, y: Math.floor(i / 20) });
-      const busy = new Set(S.snake.concat(window.__snake.ghostCells()).map(p => p.x + "," + p.y));
-      for (let i = 0; i < 300; i++) { const f = window.__snake.spawnFood(); if (busy.has(f.x + "," + f.y)) return true; }
-      return false; });
-    assert.strictEqual(bad, false);
-  });
-
-  await t("real keyboard input steers, Space blinks, R restarts, P pauses", async () => {
-    await fresh();
+  await t("Play starts a game; arrow keys steer; reverse is ignored", async () => {
+    await page.click("#b-play");
+    assert.strictEqual(await screen(page), "playing");
+    await freeze(page);
     await page.keyboard.press("ArrowUp");
-    const d = await G(() => { window.__snake.step(); return window.__snake.state().dir; });
-    assert.deepStrictEqual(d, { x: 0, y: -1 });
+    await tick(page);
+    assert.deepStrictEqual(await E(page, () => window.__echo.run().g.dir), { x: 0, y: -1 });
+    await page.keyboard.press("ArrowDown");             // reverse of up: must be ignored
+    await tick(page);
+    assert.deepStrictEqual(await E(page, () => window.__echo.run().g.dir), { x: 0, y: -1 });
+    await page.keyboard.press("a");                     // WASD works
+    await tick(page);
+    assert.deepStrictEqual(await E(page, () => window.__echo.run().g.dir), { x: -1, y: 0 });
+  });
+
+  await t("Space spends a phase charge and the HUD reflects it", async () => {
+    await freeze(page);
+    const before = await E(page, () => window.__echo.run().g.charges);
+    await page.keyboard.press(" ");
+    const after = await E(page, () => ({ c: window.__echo.run().g.charges, ph: window.__echo.run().g.phase }));
+    assert.strictEqual(after.c, before - 1);
+    assert.ok(after.ph > 0);
+    await page.waitForTimeout(80);
+    assert.strictEqual(await page.locator("#pips.active").count(), 1);
+  });
+
+  await t("eating updates score, combo multiplier and HUD text", async () => {
+    await E(page, () => { window.__echo.startGame("endless"); });
+    await freeze(page);
+    await E(page, () => { const g = window.__echo.run().g; g.food = { x: g.snake[0].x + 1, y: g.snake[0].y }; });
+    await tick(page);
+    await page.waitForTimeout(400);
+    assert.ok(+(await page.textContent("#score")) >= 10);
+    assert.match(await page.textContent("#mult"), /^x\d$/);
+  });
+
+  await t("pause with P freezes the game, Resume continues, Settings reachable from pause", async () => {
     await page.keyboard.press("p");
-    assert.strictEqual(await G(() => window.__snake.state().paused), true);
-    await page.keyboard.press("p");
-    await G(() => { window.__snake.state().alive = false; });
+    assert.strictEqual(await screen(page), "pause");
+    const t1 = await E(page, () => window.__echo.run().g.ticks);
+    await page.waitForTimeout(300);
+    assert.strictEqual(await E(page, () => window.__echo.run().g.ticks), t1);
+    await page.click("#b-psettings");
+    assert.strictEqual(await screen(page), "settings");
+    await page.click("#ov-settings [data-close]");
+    assert.strictEqual(await screen(page), "pause");
+    await page.click("#b-resume");
+    assert.strictEqual(await screen(page), "playing");
+  });
+
+  await t("R restarts with a fresh game", async () => {
+    await freeze(page);
+    await tick(page, 3);
     await page.keyboard.press("r");
-    assert.strictEqual(await G(() => window.__snake.state().alive), true);
+    await freeze(page);
+    assert.strictEqual(await E(page, () => window.__echo.run().g.ticks), 0);
+    assert.strictEqual(await E(page, () => window.__echo.run().g.score), 0);
   });
 
-  await t("live loop advances on its own and draws without errors", async () => {
-    await fresh();
-    const before = await G(() => window.__snake.state().hist.length);
-    await page.waitForTimeout(700);
-    const after = await G(() => window.__snake.state().hist.length);
-    assert.ok(after > before, `history ${before} -> ${after}`);
+  await t("dying shows the game-over screen with rank, stats and NEW BEST; best persists", async () => {
+    await E(page, () => { window.__echo.store.set("best.endless", 0); window.__echo.startGame("endless"); });
+    await freeze(page);
+    await E(page, () => { const g = window.__echo.run().g; g.food = { x: g.snake[0].x + 1, y: g.snake[0].y }; });
+    await tick(page);                                   // score some points
+    // curl the snake into itself: 7 cells in a hook shape, head steps into a non-tail body cell
+    await E(page, () => { const e = window.__echo, r = e.run(), g = r.g;
+      g.snake = [{x:5,y:5},{x:5,y:6},{x:6,y:6},{x:6,y:5},{x:6,y:4},{x:5,y:4},{x:4,y:4}]; g.dir = {x:0,y:-1}; g.queue = []; g.food = {x:0,y:0};
+      e.doTick(r, true); });
+    await page.waitForSelector("#ov-over.show", { timeout: 4000 });
+    assert.ok(+(await page.textContent("#o-score")) >= 10);
+    assert.ok((await page.textContent("#o-rank")).length > 2);
+    assert.strictEqual(await page.textContent("#o-cause"), "Self");
+    assert.strictEqual(await page.textContent("#o-new"), "NEW BEST");
+    assert.ok(await E(page, () => window.__echo.store.get("best.endless", 0)) >= 10);
+  });
+
+  await t("Play again works with Enter (button is focused)", async () => {
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => window.__echo.app.screen === "playing");
+    assert.strictEqual(await E(page, () => window.__echo.run().g.alive), true);
+  });
+
+  await t("settings toggle, persist across reload, and colorblind palette recolors the UI", async () => {
+    await page.reload(); await page.waitForFunction(() => window.__echo);
+    await page.click("#b-settings");
+    await page.click('[data-setting="cb"]');
+    await page.click('[data-setting="music"]');
+    assert.strictEqual(await page.getAttribute('[data-setting="cb"]', "aria-checked"), "true");
+    assert.strictEqual((await E(page, () => getComputedStyle(document.documentElement).getPropertyValue("--accent"))).trim(), "#4da3ff");
+    await page.reload(); await page.waitForFunction(() => window.__echo);
+    assert.strictEqual(await E(page, () => window.__echo.settings.cb), true);
+    assert.strictEqual(await E(page, () => window.__echo.settings.music), false);
+    await E(page, () => { window.__echo.store.set("cb", false); window.__echo.store.set("music", true); });
+  });
+
+  await t("daily challenge is seeded: two starts spawn the same first food", async () => {
+    await page.reload(); await page.waitForFunction(() => window.__echo);
+    const a = await E(page, () => { window.__echo.startGame("daily"); const g = window.__echo.run().g; return [g.food, g.P.N]; });
+    const b = await E(page, () => { window.__echo.startGame("daily"); const g = window.__echo.run().g; return [g.food, g.P.N]; });
+    assert.deepStrictEqual(a, b);
+    assert.strictEqual(await E(page, () => window.__echo.app.mode), "daily");
+  });
+
+  await t("rendering a late-game board (80 long, 3 echoes) stays fast", async () => {
+    await E(page, () => window.__echo.startGame("endless"));
+    await freeze(page);
+    const ms = await E(page, () => {
+      const e = window.__echo, r = e.run(), g = r.g, bot = EchoBots.makeBot({ depth: 25 });
+      let n = 0; while (g.alive && g.foods < 30 && n++ < 3000) { const d = bot(g); if (d.phase) g.phaseShift(); else if (d.dir) g.turn(...d.dir); r.prev = g.snake.map(p => ({ ...p })); g.step(); }
+      const T = performance.now(); for (let i = 0; i < 60; i++) { r.alpha = i / 60; e.render(r, i * 16); }
+      return { per: (performance.now() - T) / 60, foods: g.foods, echoes: g.echoCount(), len: g.snake.length };
+    });
+    assert.ok(ms.foods >= 20, "bot reached " + ms.foods);
+    assert.ok(ms.per < 10, `render ${ms.per.toFixed(2)}ms/frame`);
+  });
+
+  await ctx.close();
+
+  // ---- phone: touch, layout, swipe -------------------------------------------------
+  ({ ctx, page } = await open({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 }));
+
+  await t("phone layout: no horizontal scroll, board fits, phase button shown", async () => {
+    await page.tap("#b-play");
+    await page.waitForFunction(() => window.__echo.app.screen === "playing");
+    const m = await E(page, () => {
+      const r = document.getElementById("stage").getBoundingClientRect(), b = document.getElementById("phaseBtn").getBoundingClientRect();
+      return { sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, right: r.right, left: r.left, bottom: b.bottom, ih: innerHeight, btn: getComputedStyle(document.getElementById("phaseBtn")).display };
+    });
+    assert.ok(m.sw <= m.cw + 1, `scrollWidth ${m.sw} > ${m.cw}`);
+    assert.ok(m.left >= 0 && m.right <= m.cw, "stage within viewport");
+    assert.strictEqual(m.btn, "block");
+    assert.ok(m.bottom <= m.ih + 1, "phase button on screen");
+  });
+
+  await t("swipe steers the snake and the on-screen button phases", async () => {
+    await freeze(page);
+    await E(page, () => { window.__echo.run().g.dir = { x: 1, y: 0 }; });
+    const box = await page.locator("#stage").boundingBox();
+    const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+    const swipe = (dx, dy) => page.evaluate(([x, y, dx, dy]) => {
+      const st = document.getElementById("stage");
+      const mk = (type, X, Y) => st.dispatchEvent(new TouchEvent(type, { bubbles: true, cancelable: true, changedTouches: [new Touch({ identifier: 1, target: st, clientX: X, clientY: Y })] }));
+      mk("touchstart", x, y); mk("touchmove", x + dx, y + dy); mk("touchend", x + dx, y + dy);
+    }, [cx, cy, dx, dy]);
+    await swipe(0, -60);
+    await tick(page);
+    assert.deepStrictEqual(await E(page, () => window.__echo.run().g.dir), { x: 0, y: -1 });
+    const c0 = await E(page, () => window.__echo.run().g.charges);
+    await page.tap("#phaseBtn");
+    assert.strictEqual(await E(page, () => window.__echo.run().g.charges), c0 - 1);
+  });
+
+  await ctx.close();
+
+  await t("no JS errors or console errors during any of the above", async () => {
     assert.deepStrictEqual(errors, []);
   });
 
-  await t("bot plays 20 seconds of real time without a crash or JS error", async () => {
-    await fresh();
-    const keys = ["ArrowUp", "ArrowRight", "ArrowDown", "ArrowLeft"];
-    for (let i = 0; i < 40; i++) { await page.keyboard.press(keys[i % 4]); await page.waitForTimeout(120); }
-    assert.deepStrictEqual(errors, []);
-  });
-
+  // screenshot for the record
+  ({ ctx, page } = await open());
+  await page.waitForTimeout(600);
   await page.screenshot({ path: process.env.SHOT || "/tmp/snake.png" });
+  await ctx.close();
   await browser.close();
 
   let failed = 0;

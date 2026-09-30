@@ -2,205 +2,209 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#070b12">
 <title>Echo Snake</title>
 <style>
   :root {
-    --bg: #0b0f14; --panel: #131a22; --ink: #e6edf3; --dim: #8b98a5;
-    --snake: #4ade80; --snake-head: #bbf7d0; --echo: #22d3ee; --food: #fb7185; --grid: #16202b;
+    --bg: #070b12; --panel: #0e1520; --panel2: #141d2b; --line: #1f2c3f;
+    --ink: #e8eff8; --dim: #8496ab; --accent: #22d3ee; --gold: #fbbf24; --danger: #fb7185; --ok: #4ade80;
+    --radius: 14px;
   }
-  * { box-sizing: border-box; }
-  body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink);
-         font: 16px/1.4 system-ui, sans-serif; display: grid; place-items: center; }
-  main { width: min(100vw - 32px, 520px); padding: 16px 0; }
-  h1 { margin: 0 0 8px; font-size: 1.4rem; letter-spacing: .04em; }
-  h1 span { color: var(--echo); }
-  #hud { display: flex; justify-content: space-between; gap: 8px; background: var(--panel);
-         padding: 8px 12px; border-radius: 8px 8px 0 0; font-variant-numeric: tabular-nums; }
-  #hud b { color: var(--dim); font-weight: 500; margin-right: 4px; }
-  #pips { letter-spacing: 3px; color: var(--echo); }
-  canvas { display: block; width: 100%; aspect-ratio: 1; background: var(--bg); touch-action: none;
-           border: 1px solid var(--grid); border-radius: 0 0 8px 8px; }
-  p { color: var(--dim); font-size: .85rem; margin: 10px 0 0; }
-  kbd { background: var(--panel); border-radius: 4px; padding: 1px 6px; color: var(--ink); }
-  #status { min-height: 1.4em; color: var(--echo); }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body { margin: 0; background: radial-gradient(1200px 700px at 50% -10%, #0f1b2d 0%, var(--bg) 60%) fixed;
+         color: var(--ink); font: 16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+         display: grid; place-items: center; overflow: hidden; user-select: none; -webkit-user-select: none; }
+  #app { --size: min(calc(100vw - 20px), calc(100vh - 150px), 680px); width: var(--size); display: grid; gap: 10px; }
+  @media (max-width: 560px) { #app { --size: min(calc(100vw - 12px), calc(100vh - 210px)); } }
+
+  /* ---------- HUD ---------- */
+  #hud { display: grid; grid-template-columns: 1fr auto 1fr; align-items: end; gap: 10px; padding: 0 4px; }
+  .stat { min-width: 0; }
+  .stat small { display: block; color: var(--dim); font-size: .68rem; letter-spacing: .14em; text-transform: uppercase; }
+  #score { font-size: clamp(1.7rem, 6vw, 2.5rem); font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; letter-spacing: -.01em; }
+  #mid { text-align: center; }
+  #mult { display: inline-block; min-width: 3.3em; padding: 2px 10px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--line);
+          font-weight: 800; font-variant-numeric: tabular-nums; transition: transform .12s, background .2s, color .2s; }
+  #mult.hot { background: var(--gold); color: #1a1200; border-color: var(--gold); }
+  #mult.pop { transform: scale(1.25); }
+  #combobar { height: 4px; border-radius: 4px; background: var(--panel2); margin-top: 6px; overflow: hidden; }
+  #combobar i { display: block; height: 100%; width: 0; background: var(--gold); transition: width .1s linear; }
+  #right { text-align: right; }
+  #pips { display: inline-flex; gap: 5px; vertical-align: middle; }
+  #pips i { width: 14px; height: 14px; border-radius: 4px; transform: rotate(45deg); border: 2px solid var(--accent); }
+  #pips i.on { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+  #pips.active i.on { animation: pulse .35s infinite alternate; }
+  @keyframes pulse { to { transform: rotate(45deg) scale(1.3); } }
+  #meta { color: var(--dim); font-size: .75rem; margin-top: 4px; display: flex; gap: 10px; justify-content: flex-end; }
+  #meta b { color: var(--ink); font-weight: 600; }
+
+  /* ---------- stage ---------- */
+  #stage { position: relative; width: 100%; aspect-ratio: 1; border-radius: var(--radius); overflow: hidden;
+           background: #050810; border: 1px solid var(--line); box-shadow: 0 20px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(34,211,238,.04) inset; touch-action: none; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #toast { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: 92%; text-align: center; pointer-events: none;
+           background: rgba(8,14,24,.86); border: 1px solid var(--line); padding: 8px 14px; border-radius: 10px; font-size: .9rem;
+           opacity: 0; transition: opacity .25s; }
+  #toast.show { opacity: 1; }
+  #toast b { color: var(--accent); }
+  #banner { position: absolute; left: 0; right: 0; top: 30%; text-align: center; pointer-events: none; font-weight: 900; letter-spacing: .3em;
+            font-size: clamp(1.2rem, 5vw, 2rem); opacity: 0; color: var(--accent); text-shadow: 0 0 24px var(--accent); }
+  #banner.go { animation: banner 1.6s ease-out; }
+  @keyframes banner { 0% { opacity: 0; transform: scale(1.6); } 15% { opacity: 1; transform: scale(1); } 75% { opacity: 1; } 100% { opacity: 0; transform: translateY(-12px); } }
+
+  /* ---------- overlays ---------- */
+  .overlay { position: absolute; inset: 0; display: none; place-items: center; padding: 14px; background: rgba(5,8,16,.62); backdrop-filter: blur(3px); }
+  .overlay.show { display: grid; }
+  #ov-title { background: linear-gradient(180deg, rgba(5,8,16,.15), rgba(5,8,16,.55)); backdrop-filter: none; align-items: end; padding-bottom: 6%; }
+  #ov-title .card { background: rgba(14,21,32,.8); backdrop-filter: blur(6px); }
+  body.on-title #hud { opacity: .35; }
+  .card { width: min(100%, 420px); background: linear-gradient(180deg, var(--panel2), var(--panel)); border: 1px solid var(--line); border-radius: var(--radius);
+          padding: 20px; box-shadow: 0 20px 60px rgba(0,0,0,.5); max-height: 100%; overflow: auto; }
+  h1 { margin: 0; font-size: clamp(2rem, 9vw, 3rem); letter-spacing: .06em; font-weight: 900; line-height: 1; text-align: center; }
+  h1 span { color: var(--accent); text-shadow: 0 0 28px rgba(34,211,238,.6); }
+  h2 { margin: 0 0 10px; font-size: 1.25rem; letter-spacing: .04em; }
+  .tag { text-align: center; color: var(--dim); margin: 8px 0 18px; }
+  .btns { display: grid; gap: 8px; }
+  button { font: inherit; color: var(--ink); background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 11px 14px; cursor: pointer;
+           font-weight: 650; text-align: center; transition: transform .08s, background .15s, border-color .15s; }
+  button:hover { background: #1a2638; border-color: #2c3f5a; }
+  button:active { transform: scale(.98); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button.primary { background: var(--accent); color: #04222a; border-color: var(--accent); }
+  button.primary:hover { background: #5ee6f7; }
+  button small { display: block; font-weight: 500; opacity: .75; font-size: .75rem; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: 0; }
+  .row small { color: var(--dim); display: block; }
+  .switch { width: 46px; height: 26px; border-radius: 999px; background: var(--line); position: relative; flex: none; padding: 0; border: 0; }
+  .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: transform .15s; }
+  .switch[aria-checked="true"] { background: var(--accent); }
+  .switch[aria-checked="true"]::after { transform: translateX(20px); }
+  .best { display: flex; justify-content: center; gap: 22px; color: var(--dim); font-size: .85rem; margin-bottom: 14px; }
+  .best b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .legend { display: grid; gap: 9px; margin: 6px 0 12px; font-size: .92rem; }
+  .legend div { display: grid; grid-template-columns: 26px 1fr; gap: 10px; align-items: start; }
+  .sw { width: 20px; height: 20px; border-radius: 6px; margin-top: 2px; }
+  .sw.snake { background: #4ade80; } .sw.echo { background: rgba(34,211,238,.35); border: 2px dashed #22d3ee; }
+  .sw.food { background: #fb7185; border-radius: 50%; } .sw.gold { background: #fbbf24; border-radius: 50%; box-shadow: 0 0 10px #fbbf24; }
+  .sw.phase { background: transparent; border: 2px solid #22d3ee; transform: rotate(45deg) scale(.8); }
+  kbd { background: #0a111b; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 0 6px; font: 600 .8em ui-monospace, monospace; }
+  .rank { text-align: center; font-size: .85rem; letter-spacing: .3em; text-transform: uppercase; color: var(--accent); }
+  .big { text-align: center; font-size: clamp(2.6rem, 12vw, 3.6rem); font-weight: 900; font-variant-numeric: tabular-nums; line-height: 1.05; }
+  .newbest { text-align: center; color: var(--gold); font-weight: 800; letter-spacing: .2em; min-height: 1.4em; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0; }
+  .grid div { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px; text-align: center; }
+  .grid b { display: block; font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+  .grid small { color: var(--dim); font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; }
+  .hint { color: var(--dim); font-size: .78rem; text-align: center; margin-top: 12px; }
+
+  /* ---------- touch phase button ---------- */
+  #phaseBtn { display: none; width: 100%; padding: 16px; font-size: 1.05rem; letter-spacing: .12em; text-transform: uppercase; }
+  @media (pointer: coarse) { #phaseBtn { display: block; } }
+  #phaseBtn:disabled { opacity: .4; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  @media (prefers-reduced-motion: reduce) { #banner.go { animation-duration: .01s; } #pips.active i.on { animation: none; } }
 </style>
 </head>
 <body>
-<main>
-  <h1>ECHO <span>SNAKE</span></h1>
-  <div id="hud">
-    <div><b>Score</b><span id="score">0</span></div>
-    <div><b>Best</b><span id="best">0</span></div>
-    <div><b>Echo</b><span id="delay">24</span></div>
-    <div><b>Blink</b><span id="pips"></span></div>
+<div id="app">
+  <div id="hud" aria-label="Game status">
+    <div class="stat"><small>Score</small><div id="score">0</div></div>
+    <div id="mid"><span id="mult" title="Score multiplier">x1</span><div id="combobar" title="Combo timer"><i></i></div></div>
+    <div class="stat" id="right">
+      <small>Phase</small><span id="pips" aria-label="Phase charges"></span>
+      <div id="meta"><span>Echoes <b id="echoes">1</b></span><span>Best <b id="best">0</b></span></div>
+    </div>
   </div>
-  <canvas id="c" width="480" height="480" aria-label="Echo Snake game board"></canvas>
-  <p id="status" role="status" aria-live="polite"></p>
-  <p>Your past self trails you as a deadly <span style="color:var(--echo)">echo</span>. Each food shrinks its delay. <kbd>Space</kbd> blinks you onto the echo's head (limited charges, earn one every 4 foods). <kbd>Arrows</kbd>/<kbd>WASD</kbd> move, <kbd>P</kbd> pause, <kbd>R</kbd> restart. On touch: swipe to steer, tap to blink.</p>
-</main>
-<script>
-(() => {
-  const N = 20, CELL = 24, START_DELAY = 24, MIN_DELAY = 10, MAX_CHARGES = 3, FOODS_PER_CHARGE = 4;
-  const cv = document.getElementById("c"), ctx = cv.getContext("2d");
-  const $ = id => document.getElementById(id);
-  const eq = (a, b) => a.x === b.x && a.y === b.y;
-  const wrap = v => (v + N) % N;
-  let S, best = 0;
-  try { best = +localStorage.getItem("echo-snake-best") || 0; } catch (e) {}
 
-  function reset() {
-    const snake = [{x: 10, y: 10}, {x: 9, y: 10}, {x: 8, y: 10}];
-    S = { snake, dir: {x: 1, y: 0}, queue: [], hist: snake.slice().reverse(),
-          delay: START_DELAY, food: null, score: 0, foods: 0, charges: 1,
-          alive: true, paused: false, msg: "" };
-    S.food = spawnFood();
-    hud();
-  }
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="banner"></div>
+    <div id="toast" role="status" aria-live="polite"></div>
 
-  function ghostCells() {
-    const out = [], end = S.hist.length - 1 - S.delay;
-    for (let k = 0; k < S.snake.length; k++) {
-      const i = end - k;
-      if (i >= 0) out.push(S.hist[i]);
-    }
-    return out;
-  }
+    <div class="overlay" id="ov-title">
+      <div class="card">
+        <h1>ECHO <span>SNAKE</span></h1>
+        <p class="tag">Your past is chasing you.</p>
+        <div class="best"><span>Best <b id="t-best">0</b></span><span>Daily <b id="t-daily">0</b></span></div>
+        <div class="btns">
+          <button class="primary" id="b-play">Play<small>Endless &middot; press Enter</small></button>
+          <button id="b-daily">Daily Challenge<small id="daily-sub">Same seed for everyone today</small></button>
+          <button id="b-how">How to play</button>
+          <button id="b-settings">Settings</button>
+        </div>
+      </div>
+    </div>
 
-  function spawnFood() {
-    const busy = new Set(S.snake.concat(ghostCells()).map(p => p.x + "," + p.y));
-    const free = [];
-    for (let x = 0; x < N; x++) for (let y = 0; y < N; y++) if (!busy.has(x + "," + y)) free.push({x, y});
-    return free.length ? free[Math.floor(Math.random() * free.length)] : null;
-  }
+    <div class="overlay" id="ov-how">
+      <div class="card">
+        <h2>How to play</h2>
+        <div class="legend">
+          <div><span class="sw snake"></span><span>Steer with <kbd>&#8592;&#8593;&#8594;&#8595;</kbd> / <kbd>WASD</kbd> or swipe. The board wraps around.</span></div>
+          <div><span class="sw echo"></span><span><b>Echoes</b> replay your own path, trailing behind you with a gap. Touching one ends the run. A new echo appears every 10 foods.</span></div>
+          <div><span class="sw food"></span><span>Eat food. Reach it quickly to build a <b>combo</b> and multiply your score.</span></div>
+          <div><span class="sw gold"></span><span><b>Golden food</b> is worth big points and refills a charge, but it spawns in dangerous spots and vanishes.</span></div>
+          <div><span class="sw phase"></span><span><kbd>Space</kbd> / tap the button to <b>Phase</b>: pass through echoes for 4 moves. Phasing through one scores a bonus. <b>Grazing</b> next to an echo scores too. You earn a charge every 4 foods.</span></div>
+        </div>
+        <div class="btns"><button class="primary" data-close>Got it</button></div>
+        <p class="hint"><kbd>P</kbd> pause &middot; <kbd>R</kbd> restart &middot; <kbd>M</kbd> mute</p>
+      </div>
+    </div>
 
-  function say(m) { S.msg = m; $("status").textContent = m; }
+    <div class="overlay" id="ov-settings">
+      <div class="card">
+        <h2>Settings</h2>
+        <div class="row"><div>Sound effects</div><button class="switch" role="switch" aria-checked="true" data-setting="sfx" aria-label="Sound effects"></button></div>
+        <div class="row"><div>Music</div><button class="switch" role="switch" aria-checked="true" data-setting="music" aria-label="Music"></button></div>
+        <div class="row"><div>Reduce motion<small>No screen shake or flashes</small></div><button class="switch" role="switch" aria-checked="false" data-setting="reduce" aria-label="Reduce motion"></button></div>
+        <div class="row"><div>Colorblind palette<small>Blue and orange instead of green and cyan</small></div><button class="switch" role="switch" aria-checked="false" data-setting="cb" aria-label="Colorblind palette"></button></div>
+        <div class="btns" style="margin-top:12px"><button class="primary" data-close>Done</button></div>
+      </div>
+    </div>
 
-  function die(why) {
-    S.alive = false;
-    if (S.score > best) {
-      best = S.score;
-      try { localStorage.setItem("echo-snake-best", String(best)); } catch (e) {}
-    }
-    say(why === "echo" ? "Caught by your own echo. Press R to restart." : "You ran into yourself. Press R to restart.");
-    hud();
-  }
+    <div class="overlay" id="ov-pause">
+      <div class="card">
+        <h2>Paused</h2>
+        <div class="btns">
+          <button class="primary" id="b-resume">Resume<small>P or Esc</small></button>
+          <button id="b-restart">Restart<small>R</small></button>
+          <button id="b-psettings">Settings</button>
+          <button id="b-quit">Quit to menu</button>
+        </div>
+      </div>
+    </div>
 
-  function step() {
-    if (!S.alive || S.paused) return;
-    if (S.queue.length) {
-      const d = S.queue.shift();
-      if (!(d.x === -S.dir.x && d.y === -S.dir.y)) S.dir = d;
-    }
-    const h = S.snake[0];
-    const nh = {x: wrap(h.x + S.dir.x), y: wrap(h.y + S.dir.y)};
-    const eat = S.food && eq(nh, S.food);
-    const body = eat ? S.snake : S.snake.slice(0, -1);
-    if (body.some(p => eq(p, nh))) return die("self");
-    if (ghostCells().some(p => eq(p, nh))) return die("echo");
-    S.snake.unshift(nh);
-    if (!eat) S.snake.pop();
-    S.hist.push(nh);
-    while (S.hist.length > 800) S.hist.shift();
-    if (eat) {
-      S.score += 10; S.foods++;
-      S.delay = Math.max(MIN_DELAY, S.delay - 1);
-      if (S.foods % FOODS_PER_CHARGE === 0 && S.charges < MAX_CHARGES) { S.charges++; say("Blink charge gained."); }
-      else if (S.msg) say("");
-      S.food = spawnFood();
-    }
-    hud();
-  }
+    <div class="overlay" id="ov-over">
+      <div class="card">
+        <div class="rank" id="o-rank">Static</div>
+        <div class="big" id="o-score">0</div>
+        <div class="newbest" id="o-new"></div>
+        <div class="grid">
+          <div><b id="o-foods">0</b><small>Foods</small></div>
+          <div><b id="o-combo">0</b><small>Best combo</small></div>
+          <div><b id="o-grazes">0</b><small>Grazes</small></div>
+          <div><b id="o-phases">0</b><small>Phases</small></div>
+          <div><b id="o-golds">0</b><small>Golden</small></div>
+          <div><b id="o-cause">-</b><small>Ended by</small></div>
+        </div>
+        <div class="btns">
+          <button class="primary" id="b-again">Play again<small>Enter or Space</small></button>
+          <button id="b-share">Copy result</button>
+          <button id="b-menu">Menu</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
-  function blink() {
-    if (!S.alive || S.paused) return false;
-    if (S.charges < 1) { say("No blink charges."); return false; }
-    const g = S.hist[S.hist.length - 1 - S.delay];
-    if (!g) { say("No echo yet."); return false; }
-    if (S.snake.slice(1).some(p => eq(p, g))) { say("Echo is overlapping your body. Blink blocked."); return false; }
-    S.charges--;
-    S.snake[0] = {x: g.x, y: g.y};
-    S.hist.push({x: g.x, y: g.y});
-    say("Blinked.");
-    hud();
-    return true;
-  }
+  <button id="phaseBtn" aria-label="Phase through echoes">Phase</button>
+  <div class="sr" id="live" aria-live="polite"></div>
+</div>
 
-  function turn(x, y) {
-    const last = S.queue.length ? S.queue[S.queue.length - 1] : S.dir;
-    if (last.x === x && last.y === y) return;
-    if (S.queue.length < 2) S.queue.push({x, y});
-  }
-
-  function hud() {
-    $("score").textContent = S.score;
-    $("best").textContent = best;
-    $("delay").textContent = S.delay;
-    $("pips").textContent = "◆".repeat(S.charges) + "◇".repeat(MAX_CHARGES - S.charges);
-  }
-
-  function cell(p, pad, r) {
-    ctx.beginPath();
-    ctx.roundRect(p.x * CELL + pad, p.y * CELL + pad, CELL - 2 * pad, CELL - 2 * pad, r);
-    ctx.fill();
-  }
-
-  function draw() {
-    const css = getComputedStyle(document.documentElement);
-    const v = n => css.getPropertyValue(n).trim();
-    ctx.fillStyle = v("--bg"); ctx.fillRect(0, 0, cv.width, cv.height);
-    ctx.strokeStyle = v("--grid"); ctx.lineWidth = 1;
-    for (let i = 1; i < N; i++) {
-      ctx.beginPath(); ctx.moveTo(i * CELL, 0); ctx.lineTo(i * CELL, cv.height); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(0, i * CELL); ctx.lineTo(cv.width, i * CELL); ctx.stroke();
-    }
-    const gc = ghostCells();
-    gc.forEach((p, i) => { ctx.fillStyle = v("--echo"); ctx.globalAlpha = i === 0 ? .8 : .35; cell(p, 2, 6); });
-    ctx.globalAlpha = 1;
-    if (S.food) { ctx.fillStyle = v("--food"); cell(S.food, 5, 12); }
-    S.snake.forEach((p, i) => { ctx.fillStyle = i === 0 ? v("--snake-head") : v("--snake"); cell(p, 1.5, 6); });
-    if (!S.alive || S.paused) {
-      ctx.fillStyle = "rgba(11,15,20,.72)"; ctx.fillRect(0, 0, cv.width, cv.height);
-      ctx.fillStyle = v("--ink"); ctx.textAlign = "center"; ctx.font = "600 28px system-ui";
-      ctx.fillText(S.alive ? "Paused" : "Game over", cv.width / 2, cv.height / 2 - 6);
-      ctx.font = "16px system-ui"; ctx.fillStyle = v("--dim");
-      ctx.fillText(S.alive ? "Press P to resume" : "Score " + S.score + " · press R or tap", cv.width / 2, cv.height / 2 + 24);
-    }
-  }
-
-  let last = 0;
-  function loop(t) {
-    const interval = Math.max(70, 120 - S.foods * 3);
-    if (t - last >= interval) { last = t; step(); }
-    draw();
-    requestAnimationFrame(loop);
-  }
-
-  const KEYS = { ArrowUp: [0, -1], w: [0, -1], ArrowDown: [0, 1], s: [0, 1],
-                 ArrowLeft: [-1, 0], a: [-1, 0], ArrowRight: [1, 0], d: [1, 0] };
-  addEventListener("keydown", e => {
-    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-    if (KEYS[k]) { turn(...KEYS[k]); e.preventDefault(); }
-    else if (k === " ") { blink(); e.preventDefault(); }
-    else if (k === "p") { S.paused = !S.paused; say(S.paused ? "Paused." : ""); }
-    else if (k === "r") { reset(); say(""); }
-  });
-
-  let t0 = null;
-  cv.addEventListener("touchstart", e => { t0 = e.changedTouches[0]; }, {passive: true});
-  cv.addEventListener("touchend", e => {
-    if (!t0) return;
-    const t1 = e.changedTouches[0], dx = t1.clientX - t0.clientX, dy = t1.clientY - t0.clientY;
-    t0 = null;
-    if (!S.alive) { reset(); say(""); return; }
-    if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) { blink(); return; }
-    if (Math.abs(dx) > Math.abs(dy)) turn(dx > 0 ? 1 : -1, 0); else turn(0, dy > 0 ? 1 : -1);
-  }, {passive: true});
-
-  reset();
-  window.__snake = { state: () => S, step, blink, reset, turn, ghostCells, spawnFood };
-  requestAnimationFrame(loop);
-})();
-</script>
+<script src="core.js"></script>
+<script src="bots.js"></script>
+<script src="audio.js"></script>
+<script src="game.js"></script>
 </body>
 </html>
