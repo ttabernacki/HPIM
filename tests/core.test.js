@@ -70,6 +70,15 @@ test("hitting a non-tail body cell kills you (self)", () => {
   assert.strictEqual(g.cause, "self");
 });
 
+test("death records what you hit and where", () => {
+  const g = setup({ snake: [cell(5, 5), cell(5, 6), cell(6, 6), cell(6, 5), cell(6, 4), cell(5, 4), cell(4, 4)], dir: cell(0, -1) });
+  g.step();
+  assert.deepStrictEqual(g.deathAt, cell(5, 4));
+  const ev = g.drainEvents().find(e => e.type === "die");
+  assert.strictEqual(ev.cause, "self");
+  assert.deepStrictEqual(ev.at, cell(5, 4));
+});
+
 test("cannot reverse into yourself; queue is capped at 2", () => {
   const g = setup();
   g.turn(-1, 0); g.step();

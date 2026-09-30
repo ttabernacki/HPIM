@@ -40,7 +40,7 @@
   addEventListener("resize", resize);
 
   // ------------------------------------------------------------------ app state
-  const app = { screen: "title", mode: "endless", back: "title", paused: false, run: null, demo: null, hints: store.get("hints", {}), overTimer: 0, time: 0 };
+  const app = { screen: "title", mode: "endless", back: "title", paused: false, run: null, demo: null, hints: store.get("hints", {}), overTimer: 0, time: 0, hitStop: 0 };
 
   function makeRun(game, bot) {
     return { g: game, bot: bot || null, acc: 0, alpha: 1, prev: game.snake.map(p => ({ x: p.x, y: p.y })), danger: 0, dangerTarget: 0,
@@ -53,7 +53,7 @@
   const view = () => (app.screen === "title" || (app.back === "title" && (app.screen === "how" || app.screen === "settings"))) ? app.demo : app.run || app.demo;
 
   // ------------------------------------------------------------------ effects
-  const fx = { parts: [], texts: [], rings: [], shake: 0, flash: 0, flashColor: "255,255,255" };
+  const fx = { parts: [], texts: [], rings: [], shake: 0, flash: 0, flashColor: "255,255,255", punch: 0 };
   const ec = (x, y) => ({ x: (x + 0.5) * cell, y: (y + 0.5) * cell });
 
   function burst(x, y, color, n, speed, life) {
@@ -70,6 +70,7 @@
     fx.texts.push({ x: c.x, y: c.y - cell * 0.6, text, color, t: 0, life: 0.9, size: size * cell });
   }
   function shake(a) { if (!settings.reduce) fx.shake = Math.max(fx.shake, a); }
+  function punch(a) { if (!settings.reduce) fx.punch = Math.max(fx.punch, a); }
   function flash(color, a) { if (!settings.reduce) { fx.flash = Math.max(fx.flash, a); fx.flashColor = color; } }
 
   function updateFX(dt) {
@@ -80,6 +81,7 @@
     fx.rings = fx.rings.filter(r => (r.t += s) < r.life);
     fx.shake = Math.max(0, fx.shake - s * 3);
     fx.flash = Math.max(0, fx.flash - s * 2.2);
+    fx.punch = Math.max(0, fx.punch - s * 5);
   }
 
   // ------------------------------------------------------------------ hints and toasts
@@ -168,7 +170,7 @@
         case "eat":
           burst(e.at.x, e.at.y, c.food, 16, 4.5, 0.6); ring(e.at.x, e.at.y, c.food, 2.4, 0.5);
           floatText(e.at.x, e.at.y, "+" + e.pts, e.mult > 1 ? c.gold : "#fff");
-          run.foodBorn = app.time;
+          run.foodBorn = app.time; punch(0.5);
           if (player) { audio.sfx.eat(e.combo); updateMusic(); }
           break;
         case "graze":
@@ -180,7 +182,7 @@
           if (player) { audio.sfx.phase(); navigator.vibrate?.(18); }
           break;
         case "phaseThrough":
-          burst(e.at.x, e.at.y, c.echo, 20, 5, 0.6); floatText(e.at.x, e.at.y, "PHASE +" + e.pts, c.echo, 0.55);
+          burst(e.at.x, e.at.y, c.echo, 20, 5, 0.6); floatText(e.at.x, e.at.y, "PHASE +" + e.pts, c.echo, 0.55); punch(0.8); if (player && !settings.reduce) app.hitStop = 55;
           if (player) audio.sfx.phaseThrough();
           break;
         case "phaseEnd": if (player) audio.sfx.phaseEnd(); break;
@@ -195,7 +197,7 @@
           break;
         case "golden":
           burst(e.at.x, e.at.y, c.gold, 34, 6, 0.8); ring(e.at.x, e.at.y, c.gold, 6, 0.8);
-          floatText(e.at.x, e.at.y, "GOLD +" + e.pts, c.gold, 0.6); flash("251,191,36", 0.2); shake(0.15);
+          floatText(e.at.x, e.at.y, "GOLD +" + e.pts, c.gold, 0.6); flash("251,191,36", 0.2); shake(0.15); punch(1); if (player && !settings.reduce) app.hitStop = 70;
           if (player) audio.sfx.golden();
           break;
         case "goldenGone": if (player) audio.sfx.goldenGone(); break;
@@ -253,7 +255,9 @@
   let last = 0;
   function frame(ts) {
     const dt = Math.min(64, ts - last || 16); last = ts; app.time = ts;
-    if (app.screen === "playing" && !app.paused) advance(app.run, dt, true);
+    pollGamepad();
+    if (app.hitStop > 0) app.hitStop -= dt;
+    else if (app.screen === "playing" && !app.paused) advance(app.run, dt, true);
     else if (app.screen === "over") { /* frozen on the final state; fx keep animating */ }
     else if (app.demo && (app.screen === "title" || app.back === "title")) {
       if (app.demo.over && ts > app.demo.nextRestart) newDemo(); else advance(app.demo, dt, false);
@@ -262,6 +266,8 @@
     if (toastT > 0 && (toastT -= dt) <= 0) $("toast").classList.remove("show");
     updateFX(dt);
     const r = view();
+    const ttl = app.screen === "playing" && app.run ? "Echo Snake \u00b7 " + app.run.g.score : "Echo Snake";
+    if (document.title !== ttl) document.title = ttl;
     if (r) { r.danger += (r.dangerTarget - r.danger) * Math.min(1, dt / 120); updateHud(false); render(r, ts); }
     requestAnimationFrame(frame);
   }
@@ -342,6 +348,7 @@
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = "source-over"; ctx.shadowBlur = 0;
     ctx.fillStyle = "#050810"; ctx.fillRect(0, 0, W, W);
     if (fx.shake > 0) ctx.setTransform(1, 0, 0, 1, rand(-1, 1) * fx.shake * cell * 0.5, rand(-1, 1) * fx.shake * cell * 0.5);
+    if (fx.punch > 0) { const k = 1 + fx.punch * 0.014; ctx.translate(W / 2, W / 2); ctx.scale(k, k); ctx.translate(-W / 2, -W / 2); }
 
     // grid
     ctx.strokeStyle = c.grid; ctx.lineWidth = 1;
@@ -360,6 +367,8 @@
     drawEchoes(run, t);
     drawFood(run, t);
     if (g.snake.length) drawSnake(run, t);
+
+    if (!g.alive && g.deathAt) drawDeathMark(g.deathAt, t);
 
     // particles (additive)
     ctx.globalCompositeOperation = "lighter";
@@ -386,6 +395,17 @@
     }
     if (g.phase > 0 && g.alive) { ctx.fillStyle = "rgba(34,211,238," + (0.06 + 0.04 * Math.sin(t * 20)) + ")"; ctx.fillRect(0, 0, W, W); }
     if (fx.flash > 0) { ctx.fillStyle = "rgba(" + fx.flashColor + "," + fx.flash * 0.5 + ")"; ctx.fillRect(0, 0, W, W); }
+  }
+
+  // Marks the cell you crashed into so the loss is legible (what killed me, and where).
+  function drawDeathMark(at, t) {
+    const c = pal(), p = ec(at.x, at.y), pulse = 0.6 + 0.4 * Math.sin(t * 8), r = cell * 0.55;
+    ctx.save(); ctx.translate(p.x, p.y);
+    ctx.strokeStyle = "rgb(" + c.danger + ")"; ctx.lineWidth = cell * 0.13; ctx.lineCap = "round"; ctx.globalAlpha = 0.5 + 0.5 * pulse;
+    ctx.shadowColor = "rgb(" + c.danger + ")"; ctx.shadowBlur = cell * 0.8;
+    ctx.beginPath(); ctx.arc(0, 0, r * (1.1 + 0.15 * pulse), 0, 6.283); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-r * 0.5, -r * 0.5); ctx.lineTo(r * 0.5, r * 0.5); ctx.moveTo(r * 0.5, -r * 0.5); ctx.lineTo(-r * 0.5, r * 0.5); ctx.stroke();
+    ctx.restore();
   }
 
   function drawEchoes(run, t) {
@@ -526,7 +546,7 @@
 
   // swipe steering
   let t0 = null;
-  const stage = $("stage");
+  const stage = cv;
   stage.addEventListener("touchstart", e => { audio.unlock(); t0 = { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY }; }, { passive: true });
   stage.addEventListener("touchmove", e => {
     if (!t0 || !playing()) return;
@@ -567,6 +587,26 @@
   function applyAudio() { audio.setSfx(settings.sfx); audio.setMusic(settings.music); }
   document.querySelectorAll("[data-setting]").forEach(el => el.addEventListener("click", () => setSetting(el.dataset.setting, !settings[el.dataset.setting])));
 
+  // gamepad: d-pad or left stick steers, A phases (or confirms on menus), Start pauses
+  const pad = { held: {} };
+  function pollGamepad() {
+    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    const gp = [...pads].find(p => p && p.connected);
+    if (!gp) return;
+    const b = i => !!(gp.buttons[i] && gp.buttons[i].pressed);
+    const ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
+    const now = { up: b(12) || ay < -0.6, down: b(13) || ay > 0.6, left: b(14) || ax < -0.6, right: b(15) || ax > 0.6, a: b(0), start: b(9) };
+    const edge = k => now[k] && !pad.held[k];
+    if (Object.values(now).some(Boolean)) audio.unlock();
+    if (playing()) {
+      if (edge("up")) app.run.g.turn(0, -1); if (edge("down")) app.run.g.turn(0, 1);
+      if (edge("left")) app.run.g.turn(-1, 0); if (edge("right")) app.run.g.turn(1, 0);
+      if (edge("a") && app.run.g.phaseShift()) handleEvents(app.run, true);
+    } else if (edge("a") && (app.screen === "title" || app.screen === "over")) startGame(app.screen === "over" ? undefined : "endless");
+    if (edge("start")) { if (app.screen === "playing") pause(true); else if (app.screen === "pause") pause(false); }
+    pad.held = now;
+  }
+
   // pause when the tab is hidden
   document.addEventListener("visibilitychange", () => { if (document.hidden && app.screen === "playing") pause(true); });
   addEventListener("blur", () => { if (app.screen === "playing") pause(true); });
@@ -577,5 +617,5 @@
   requestAnimationFrame(frame);
 
   // test/debug hooks
-  window.__echo = { app, settings, store, fx, startGame, pause, run: () => app.run, view, render, doTick, advance, handleEvents, showOver, setScreen, rankFor, pal };
+  window.__echo = { audio, app, settings, store, fx, startGame, pause, run: () => app.run, view, render, doTick, advance, handleEvents, showOver, setScreen, rankFor, pal };
 })();

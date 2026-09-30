@@ -103,7 +103,7 @@
       g.charges = P.startCharges; g.phase = 0;
       g.golden = null;
       g.stats = { maxCombo: 0, phases: 0, phaseThroughs: 0, goldens: 0, grazes: 0, comboBreaks: 0 };
-      g.alive = true; g.cause = null;
+      g.alive = true; g.cause = null; g.deathAt = null;
       g.events.length = 0;
       g.food = g.spawnFood();
       g.armCombo();
@@ -146,7 +146,7 @@
       if (g.queue.length < 2) g.queue.push({ x, y });
     };
 
-    function die(cause) { g.alive = false; g.cause = cause; g.events.push({ type: "die", cause }); }
+    function die(cause, at) { g.alive = false; g.cause = cause; g.deathAt = at || null; g.events.push({ type: "die", cause, at: at || null }); }
 
     // Which echo cells will be deadly after the next move (they advance one step).
     function nextEchoCells(eating) {
@@ -170,11 +170,11 @@
       const grow = eat || gold;
       const phasingNow = g.phase > 0;
       const body = grow ? g.snake : g.snake.slice(0, -1);
-      if (!(g.phase > 0 && P.phaseBody) && body.some(p => eq(p, nh))) return die("self");
+      if (!(g.phase > 0 && P.phaseBody) && body.some(p => eq(p, nh))) return die("self", nh);
       const echoes = nextEchoCells(grow);
       const inEcho = echoes.some(p => eq(p, nh));
       const armed = g.echoArmed();
-      if (!phasingNow && armed && inEcho) return die("echo");
+      if (!phasingNow && armed && inEcho) return die("echo", nh);
 
       g.snake.unshift(nh);
       if (!grow) g.snake.pop();
@@ -215,7 +215,7 @@
         if (g.echoCount() > echoesBefore) g.events.push({ type: "newEcho" });
         if (P.graceFoods > 0 && g.foods === P.graceFoods) g.events.push({ type: "armed" });
         g.food = g.spawnFood();
-        if (!g.food) { g.won = true; return die("clear"); }
+        if (!g.food) { g.won = true; return die("clear", null); }
         if (!g.golden && g.foods % P.goldenEvery === 0) {
           g.golden = g.spawnGolden();
           if (g.golden) g.events.push({ type: "goldenSpawn", at: g.golden });

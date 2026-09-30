@@ -15,7 +15,7 @@ A re-creation of two OpenAI Codex features inside a Claude Code session:
 | Phase 1 / Phase 2 memory prompts | `.claude/agents/memory-writer.md`, `memory-consolidator.md` |
 | Commands | `/persist`, `/sleep`, `/dream`, `/remember`, `/forget` in `.claude/commands/` |
 | Hook wiring | `.claude/settings.json` |
-| Tests | `tests/` (`python3 -W error::ResourceWarning -m unittest discover -s tests`) |
+| Tests | `tests/` (`python3 -W error::ResourceWarning -m unittest discover -s tests -p 'test_*.py'`) |
 
 ## Persistent mode
 
@@ -42,9 +42,49 @@ Capture is cheap and mechanical; distillation is model-driven and on demand.
 
 Memory lives in `.claude/memory/` (its own git repo, ignored by this one). It is plain files: read, diff, edit, or delete anything.
 
-## Demo: Echo Snake
+## Echo Snake (the demo game)
 
-`snake/index.html` is a single-file snake variant built with persistent mode on. Mechanic: your own past replays behind you as a deadly *echo*. Each food shrinks the echo's delay (24 down to 10 ticks), Space *blinks* you onto the echo's head (1 charge, +1 per 4 foods, max 3). Open the file in a browser. Playtest: `NODE_PATH=$(npm root -g) node tests/e2e_snake.js` (headless Chromium, 15 checks).
+Open `snake/index.html` in a browser (no build, no server needed). Built while persistent mode was on; see `snake/` and `tools/`.
+
+**The idea.** Your snake is a *dashed trail* along your own path: your body, a safe gap, then detached **echo** segments that replay where you were. Touching an echo ends the run. Echoes are fully predictable (they are your own history), so the game is planning, not reflexes.
+
+| Mechanic | Rule |
+|---|---|
+| Echo | Segments follow your path with a gap. A new one every 10 foods (max 3); the gap tightens from 14 to 5. Dormant (harmless, dim) until food #2. |
+| Phase | Space / button / A. Pass through echoes for 4 moves; +15 x multiplier for each echo cell you cross. Earn a charge every 4 foods (max 3). Never passes through your own body. |
+| Graze | Ending a move next to an echo scores +1 x multiplier: risk pays. |
+| Combo | Reach food within the shortest route + 8 ticks to raise the multiplier (x1 to x5). |
+| Golden food | Every 6 foods. 50 x multiplier, +1 phase charge, grows you; spawns next to echoes and expires. |
+| Daily | Seeded from the date: same food sequence for everyone. |
+
+**Controls.** Arrows/WASD or swipe, Space/tap the button, P/Esc pause, R restart, M mute, gamepad (d-pad, A, Start). Settings: SFX, music, reduce motion, colorblind palette.
+
+### How "fun" was measured
+
+Fun can't be measured by a bot, but *design defects* can. `tools/sim.js` plays thousands of headless games with bots of different skill (`snake/bots.js`) and reports difficulty curves, tension and how much each mechanic matters:
+
+```
+node tools/sim.js --games 200 --bot novice|human|expert|plan|random [--opts '{"graceFoods":3}']
+```
+
+What the data changed:
+
+1. **v1 (single ghost, blink teleport) was broken.** Bots never used Blink (0.0 uses, 3/3 charges banked) because the echo overlapped your body after ~10 foods, so the teleport was always blocked; the echo also turned into a plain longer tail. Redesigned into the dashed trail (gap + detached echoes) and replaced Blink with Phase.
+2. **Phase through the body was rejected.** It made the perfect-play bot effectively immortal (119/120 survived 1500 ticks) while barely changing intermediate play.
+3. **Skill ladder is healthy** (median foods): random 0, novice 3, intermediate 25, expert 45, perfect planner 66; every tier is clearly better than the one below.
+4. **The echo costs skilled players 12-23% of run length** (echo off vs on), a real threat without dominating.
+5. **Golden food is a true trade-off**: bots that chase it score about the same (3707 vs 3825 median) but survive fewer foods.
+6. **Novices died to the echo early** (35% before their 2nd food), so the first echo is dormant until food #2.
+
+Not measurable here, and left to a human: game feel by hand, sound by ear, and the exact constants (`DEFAULTS` in `snake/core.js`). Tune them and re-run the sim.
+
+### Tests
+
+```
+node --test tests/*.test.js                     # 26 core/unit tests incl. a 300-game invariant fuzz
+NODE_PATH=$(npm root -g) node tests/e2e_snake.js   # 20 headless-Chromium checks: screens, input, phone + landscape,
+                                                #   persistence, audio output, gamepad, render performance
+```
 
 ## Known limits
 

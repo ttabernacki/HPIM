@@ -139,6 +139,8 @@
         applyMusic();
       },
       get ready() { return !!ctx; },
+      // Test hook: an analyser on the master bus, to verify that sound is really produced.
+      tap() { if (!ctx) return null; const an = ctx.createAnalyser(); an.fftSize = 1024; master.connect(an); return an; },
     };
   }
 

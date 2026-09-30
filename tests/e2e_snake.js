@@ -89,6 +89,78 @@ async function t(name, fn) {
     assert.match(await page.textContent("#mult"), /^x\d$/);
   });
 
+  await t("dying draws a marker on the fatal cell, and the tab title tracks the score", async () => {
+    await E(page, () => window.__echo.startGame("endless"));
+    await freeze(page);
+    await E(page, () => { const e = window.__echo, r = e.run(), g = r.g;
+      g.snake = [{x:5,y:5},{x:5,y:6},{x:6,y:6},{x:6,y:5},{x:6,y:4},{x:5,y:4},{x:4,y:4}]; g.dir = {x:0,y:-1}; g.queue = []; g.food = {x:0,y:0};
+      g.score = 120; g.P.baseMs = 1e9; e.doTick(r, true); });
+    assert.deepStrictEqual(await E(page, () => window.__echo.run().g.deathAt), { x: 5, y: 4 });
+    await page.waitForTimeout(120);
+    const red = await E(page, () => {      // reddish pixels near the fatal cell (5,4)
+      const c = document.getElementById("cv"), n = c.width / 20, ctx = c.getContext("2d");
+      const d = ctx.getImageData(Math.round(5 * n), Math.round(4 * n), Math.round(n), Math.round(n)).data;
+      let r = 0; for (let i = 0; i < d.length; i += 4) if (d[i] > 150 && d[i] > d[i + 1] * 1.6 && d[i] > d[i + 2] * 1.1) r++;
+      return r;
+    });
+    assert.ok(red > 15, "red marker pixels: " + red);
+    assert.match(await page.title(), /^Echo Snake/);
+  });
+
+  await t("the echo arms on the grace-th food with an ECHO ARMED banner", async () => {
+    await E(page, () => window.__echo.startGame("endless"));
+    await freeze(page);
+    await E(page, () => { const e = window.__echo, r = e.run(), g = r.g; g.foods = g.P.graceFoods - 1;
+      g.food = { x: g.snake[0].x + 1, y: g.snake[0].y }; e.doTick(r, true); });
+    await page.waitForTimeout(100);
+    assert.match(await page.textContent("#banner"), /ECHO ARMED/);
+    assert.strictEqual(await E(page, () => window.__echo.run().g.echoArmed()), true);
+  });
+
+  await t("audio: SFX really produce sound (measured on the master bus)", async () => {
+    await E(page, () => window.__echo.startGame("endless"));       // click-free start still needs a gesture
+    await page.click("body", { position: { x: 5, y: 5 } }).catch(() => {});
+    await page.keyboard.press("Shift");                            // user gesture unlocks WebAudio
+    const r = await E(page, async () => {
+      const a = window.__echo.audio;
+      if (!a.ready) return { skipped: true };
+      const an = a.tap(); const buf = new Float32Array(an.fftSize);
+      window.__echo.settings.sfx = true; a.setSfx(true);
+      let peak = 0;
+      a.sfx.eat(0); a.sfx.golden(); a.sfx.phase();
+      for (let i = 0; i < 8; i++) { await new Promise(r => setTimeout(r, 25)); an.getFloatTimeDomainData(buf); peak = Math.max(peak, ...buf.map(Math.abs)); }
+      for (const k of Object.keys(a.sfx)) a.sfx[k](1);              // every effect runs without throwing
+      return { peak };
+    });
+    if (!r.skipped) assert.ok(r.peak > 0.005, "peak amplitude " + r.peak);
+  });
+
+  await t("gamepad: d-pad steers, A phases, Start pauses", async () => {
+    await E(page, () => window.__echo.startGame("endless"));
+    await freeze(page);
+    await E(page, () => {
+      window.__pad = { connected: true, axes: [0, 0], buttons: Array.from({ length: 17 }, () => ({ pressed: false })) };
+      navigator.getGamepads = () => [window.__pad];
+      window.__echo.run().g.dir = { x: 1, y: 0 };
+    });
+    await E(page, () => { window.__pad.buttons[12].pressed = true; });     // d-pad up
+    await page.waitForTimeout(80);
+    await tick(page);
+    assert.deepStrictEqual(await E(page, () => window.__echo.run().g.dir), { x: 0, y: -1 });
+    await E(page, () => { window.__pad.buttons[12].pressed = false; window.__pad.buttons[0].pressed = true; });  // A
+    await page.waitForTimeout(80);
+    assert.ok(await E(page, () => window.__echo.run().g.phase) > 0);
+    await E(page, () => { window.__pad.buttons[0].pressed = false; window.__pad.buttons[9].pressed = true; });   // Start
+    await page.waitForTimeout(80);
+    assert.strictEqual(await screen(page), "pause");
+    await E(page, () => { window.__pad.buttons[9].pressed = false; });
+    await page.waitForTimeout(60);
+    await E(page, () => { window.__pad.buttons[9].pressed = true; });
+    await page.waitForTimeout(80);
+    assert.strictEqual(await screen(page), "playing");
+    await E(page, () => { delete navigator.getGamepads; });
+  });
+
   await t("pause with P freezes the game, Resume continues, Settings reachable from pause", async () => {
     await page.keyboard.press("p");
     assert.strictEqual(await screen(page), "pause");
@@ -160,8 +232,13 @@ async function t(name, fn) {
     await E(page, () => window.__echo.startGame("endless"));
     await freeze(page);
     const ms = await E(page, () => {
-      const e = window.__echo, r = e.run(), g = r.g, bot = EchoBots.makeBot({ depth: 25 });
-      let n = 0; while (g.alive && g.foods < 30 && n++ < 3000) { const d = bot(g); if (d.phase) g.phaseShift(); else if (d.dir) g.turn(...d.dir); r.prev = g.snake.map(p => ({ ...p })); g.step(); }
+      const e = window.__echo, bot = EchoBots.makeBot({ depth: 25 });
+      let r, g;
+      for (let attempt = 0; attempt < 12; attempt++) {           // a bot can die early by bad luck: retry
+        e.startGame("endless"); r = e.run(); g = r.g;
+        let n = 0; while (g.alive && g.foods < 30 && n++ < 3000) { const d = bot(g); if (d.phase) g.phaseShift(); else if (d.dir) g.turn(...d.dir); r.prev = g.snake.map(p => ({ ...p })); g.step(); }
+        if (g.foods >= 20) break;
+      }
       const T = performance.now(); for (let i = 0; i < 60; i++) { r.alpha = i / 60; e.render(r, i * 16); }
       return { per: (performance.now() - T) / 60, foods: g.foods, echoes: g.echoCount(), len: g.snake.length };
     });
@@ -193,7 +270,7 @@ async function t(name, fn) {
     const box = await page.locator("#stage").boundingBox();
     const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
     const swipe = (dx, dy) => page.evaluate(([x, y, dx, dy]) => {
-      const st = document.getElementById("stage");
+      const st = document.getElementById("cv");
       const mk = (type, X, Y) => st.dispatchEvent(new TouchEvent(type, { bubbles: true, cancelable: true, changedTouches: [new Touch({ identifier: 1, target: st, clientX: X, clientY: Y })] }));
       mk("touchstart", x, y); mk("touchmove", x + dx, y + dy); mk("touchend", x + dx, y + dy);
     }, [cx, cy, dx, dy]);
@@ -205,6 +282,23 @@ async function t(name, fn) {
     assert.strictEqual(await E(page, () => window.__echo.run().g.charges), c0 - 1);
   });
 
+  await ctx.close();
+
+  // ---- landscape phone -------------------------------------------------------------
+  ({ ctx, page } = await open({ viewport: { width: 844, height: 390 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 }));
+  await t("landscape phone: board fits the height and does not overlap the Phase button", async () => {
+    await page.tap("#b-play");
+    await page.waitForFunction(() => window.__echo.app.screen === "playing");
+    const m = await E(page, () => {
+      const r = document.getElementById("stage").getBoundingClientRect(), b = document.getElementById("phaseBtn").getBoundingClientRect();
+      return { r: { l: r.left, t: r.top, r: r.right, b: r.bottom }, b: { l: b.left, t: b.top, r: b.right, b: b.bottom }, ih: innerHeight, iw: innerWidth, side: r.width };
+    });
+    assert.ok(m.r.t >= 0 && m.r.b <= m.ih, `board vertical fit ${m.r.t}..${m.r.b} of ${m.ih}`);
+    assert.ok(m.side >= 250, "board side " + m.side);
+    assert.ok(m.b.r <= m.iw && m.b.b <= m.ih, "button on screen");
+    const overlap = !(m.b.r <= m.r.l || m.b.l >= m.r.r || m.b.b <= m.r.t || m.b.t >= m.r.b);
+    assert.ok(!overlap, "phase button overlaps the board");
+  });
   await ctx.close();
 
   await t("no JS errors or console errors during any of the above", async () => {
