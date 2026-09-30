@@ -317,7 +317,8 @@ GIT_READONLY = {"status", "log", "diff", "show", "rev-parse", "ls-files", "descr
                 "blame", "shortlog", "ls-remote"}
 CURL_BAD_LONG = ("--request", "--data", "--form", "--upload-file", "--output",
                  "--remote-name", "--config", "--json")
-PERSIST_OK = {"status", "list", "add", "update", "done", "cancel"}
+# "sleep" is allowed: it only reduces autonomy. "on" is not.
+PERSIST_OK = {"status", "list", "add", "update", "done", "cancel", "sleep"}
 
 
 def segment_ok(argv):
@@ -346,24 +347,50 @@ def segment_ok(argv):
     return False
 
 
+OPERATORS = {";", "&&", "||", "|"}
+
+
+def bash_segments(cmd):
+    """Tokenize like a shell (quotes respected) and split into argv segments.
+
+    Returns None if the command has anything we cannot prove read-only:
+    redirects to real files, heredocs, background jobs, subshells, newlines.
+    """
+    if "\n" in cmd or "`" in cmd or "$(" in cmd:
+        return None
+    lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+    lex.whitespace_split = True
+    try:
+        toks = list(lex)
+    except ValueError:
+        return None
+    segs, cur, i = [], [], 0
+    while i < len(toks):
+        t = toks[i]
+        nxt = toks[i + 1] if i + 1 < len(toks) else ""
+        if t in OPERATORS:
+            segs.append(cur)
+            cur = []
+        elif t == ">&" and re.fullmatch(r"\d", nxt):        # 2>&1
+            i += 1
+            if cur and re.fullmatch(r"\d", cur[-1]):
+                cur.pop()
+        elif t == ">" and nxt == "/dev/null":                # 2>/dev/null
+            i += 1
+            if cur and re.fullmatch(r"\d", cur[-1]):
+                cur.pop()
+        elif all(c in "();<>&|" for c in t):
+            return None  # unhandled pure-operator token; mixed words came from quotes
+        else:
+            cur.append(t)
+        i += 1
+    segs.append(cur)
+    return [g for g in segs if g]
+
+
 def bash_readonly(cmd):
-    s = re.sub(r"\d*>&\d+", "", cmd)
-    s = re.sub(r"\d*>\s*/dev/null", "", s)
-    if any(t in s for t in ("`", "$(", ">", "<(", "<<")):
-        return False
-    for seg in re.split(r"\|\||&&|;|\||\n", s):
-        seg = seg.strip()
-        if not seg:
-            continue
-        if "&" in seg:
-            return False
-        try:
-            argv = shlex.split(seg)
-        except ValueError:
-            return False
-        if argv and not segment_ok(argv):
-            return False
-    return True
+    segs = bash_segments(cmd)
+    return segs is not None and all(segment_ok(argv) for argv in segs)
 
 
 def mcp_readonly(tool):

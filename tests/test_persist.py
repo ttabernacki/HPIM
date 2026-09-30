@@ -155,7 +155,9 @@ class Guard(Base):
         for cmd in ("ls -la", "git status", "git log --oneline | head -5",
                     "grep -rn foo . 2>/dev/null", "curl -sSL https://example.com",
                     "find . -name '*.py'", "sleep 5 && git diff",
-                    "python3 .claude/hooks/persist.py update 1 --state ok"):
+                    "python3 .claude/hooks/persist.py update 1 --state ok",
+                    'python3 .claude/hooks/persist.py done 1 --note "a; b && c | d > e"',
+                    "grep 'a>b' f 2>&1", "python3 .claude/hooks/persist.py sleep"):
             self.assertFalse(self.deny("Bash", command=cmd), cmd)
 
     def test_bash_mutating_denied(self):
@@ -167,7 +169,9 @@ class Guard(Base):
                     "find . -exec rm {} +", "echo $(rm x)", "echo `rm x`",
                     "python3 -c 'import os'", "npm install", "sed -i s/a/b/ f",
                     "python3 .claude/hooks/persist.py on", "sleep 1 &",
-                    "git -c core.pager=x log", "tee f"):
+                    "git -c core.pager=x log", "tee f", "ls\nrm x", "(rm x)",
+                    "echo 'ok' ; rm x", "cat < f", "ls >f", "ls 2>out", "echo \"$(rm x)\"",
+                    "python3 .claude/hooks/persist.py on"):
             self.assertTrue(self.deny("Bash", command=cmd), cmd)
 
     def test_mcp(self):
