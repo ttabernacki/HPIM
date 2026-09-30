@@ -138,27 +138,25 @@ async function t(name, fn) {
   await t("gamepad: d-pad steers, A phases, Start pauses", async () => {
     await E(page, () => window.__echo.startGame("endless"));
     await freeze(page);
+    const until = (fn, what) => page.waitForFunction(fn, null, { timeout: 4000 }).catch(() => { throw new Error("timed out waiting for " + what); });
     await E(page, () => {
       window.__pad = { connected: true, axes: [0, 0], buttons: Array.from({ length: 17 }, () => ({ pressed: false })) };
       navigator.getGamepads = () => [window.__pad];
       window.__echo.run().g.dir = { x: 1, y: 0 };
     });
-    await E(page, () => { window.__pad.buttons[12].pressed = true; });     // d-pad up
-    await page.waitForTimeout(80);
+    await E(page, () => { window.__pad.buttons[12].pressed = true; });                 // d-pad up
+    await until(() => window.__echo.run().g.queue.length > 0, "d-pad up to queue a turn");
     await tick(page);
     assert.deepStrictEqual(await E(page, () => window.__echo.run().g.dir), { x: 0, y: -1 });
     await E(page, () => { window.__pad.buttons[12].pressed = false; window.__pad.buttons[0].pressed = true; });  // A
-    await page.waitForTimeout(80);
-    assert.ok(await E(page, () => window.__echo.run().g.phase) > 0);
+    await until(() => window.__echo.run().g.phase > 0, "A to start a phase");
     await E(page, () => { window.__pad.buttons[0].pressed = false; window.__pad.buttons[9].pressed = true; });   // Start
-    await page.waitForTimeout(80);
-    assert.strictEqual(await screen(page), "pause");
+    await until(() => window.__echo.app.screen === "pause", "Start to pause");
     await E(page, () => { window.__pad.buttons[9].pressed = false; });
-    await page.waitForTimeout(60);
+    await page.waitForTimeout(60);                                                     // let the release register
     await E(page, () => { window.__pad.buttons[9].pressed = true; });
-    await page.waitForTimeout(80);
-    assert.strictEqual(await screen(page), "playing");
-    await E(page, () => { delete navigator.getGamepads; });
+    await until(() => window.__echo.app.screen === "playing", "Start to resume");
+    await E(page, () => { window.__pad.buttons[9].pressed = false; delete navigator.getGamepads; });
   });
 
   await t("pause with P freezes the game, Resume continues, Settings reachable from pause", async () => {

@@ -34,7 +34,7 @@ Defaults are 12 hours and 20 continuations per hour. For a long unattended watch
 
 ## 3. Rules while it is on
 
-Read `{{SKILL_DIR}}/src/persistent/persistent_mode.md` now and follow it. This session started before it was turned on, so it was not injected automatically. (In that file, `{{CLI}}` stands for the CLI defined in step 4.) In short:
+Read `{{SKILL_DIR}}/src/persistent/persistent_mode.md` now and follow it. This session started before it was turned on, so it was not injected automatically. (In that file, the CLI placeholder stands for the CLI command defined in step 4.) In short:
 
 - After your final answer, when you are continued with no new user message, look for follow-ups that directly support the finished work: close an open loop, establish an awaited result, verify a change took effect. Do not invent unrelated work.
 - Before starting one, define its scope, the outcome, the evidence, and a stopping condition. Register it. Keep going until the outcome is established, the user cancels, it is no longer relevant, or you need input or authorization. "Still pending" is not done.
