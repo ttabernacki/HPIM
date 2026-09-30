@@ -8,13 +8,15 @@ Two things live in this repo:
    python3 persistent-mode/install.py --project /path/to/your/repo      # or --user, --local, --dry-run, --check, --uninstall
    ```
 
+   As a **system-wide skill** (available in every project, installs its own hooks on first use): `python3 persistent-mode/install.py --skill --activate`.
+
    Full docs, design and limits: **[persistent-mode/README.md](persistent-mode/README.md)**. Source of truth is `persistent-mode/src/`; this repo installs its own copy into `.claude/` and a test fails if the two drift.
 
 2. **`snake/`**: *Echo Snake*, a browser game built while persistent mode was on (below), with the headless balance simulator in `tools/`.
 
 | Tests | Command |
 |---|---|
-| Persistent mode + memory + installer (65) | `python3 -W error::ResourceWarning -m unittest discover -s persistent-mode/tests -p 'test_*.py'` |
+| Persistent mode + memory + installer + skill (77) | `python3 -W error::ResourceWarning -m unittest discover -s persistent-mode/tests -p 'test_*.py'` |
 | Game rules (26, incl. fuzz) | `node --test tests/*.test.js` |
 | Game in headless Chromium (20) | `NODE_PATH=$(npm root -g) node tests/e2e_snake.js` |
 

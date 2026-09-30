@@ -9,6 +9,10 @@
   python3 install.py --project . --check            # verify an existing install
   python3 install.py --project . --uninstall        # remove exactly what was installed
 
+  python3 install.py --skill                        # system-wide SKILL in ~/.claude/skills/persistent-mode
+  python3 install.py --skill --activate             # ...and the user-wide hooks and commands in one step
+  python3 install.py --skill --uninstall            # remove the skill (hooks: install.py --user --uninstall)
+
 Safe to re-run. Existing settings and hooks are merged, never replaced. Files you edited
 after installing are never overwritten or deleted without --force. Python 3.8+, stdlib only.
 """
@@ -26,6 +30,8 @@ HERE = Path(__file__).resolve().parent
 SRC = HERE / "src"
 VERSION = "1.0.0"
 MANIFEST = "persistent-mode.manifest.json"
+SKILL_NAME = "persistent-mode"
+SKILL_MANIFEST = ".skill-manifest.json"
 
 PERSIST_FILES = ["hooks/persist.py", "persistent/persistent_mode.md", "commands/persist.md", "commands/sleep.md"]
 MEMORY_FILES = ["hooks/memory.py", "commands/dream.md", "commands/remember.md", "commands/forget.md",
@@ -211,6 +217,12 @@ def install(args):
     if not (SRC / "hooks" / "persist.py").exists():
         raise Fail(f"package sources not found at {SRC}")
 
+    if tgt.scope == "project" and not args.claude_dir:
+        user_base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+        if (user_base / MANIFEST).exists() and user_base.resolve() != tgt.base.resolve():
+            plan.warn(f"persistent mode is ALSO installed user-wide ({user_base}). Installing it in this project too "
+                      f"would run every hook twice. Remove one: install.py --uninstall (project) or install.py --user --uninstall.")
+
     for rel in wanted_files(memory):
         src = SRC / rel
         raw = src.read_bytes()
@@ -358,6 +370,136 @@ def check(args):
     return 1 if hard else 0
 
 
+# ------------------------------------------------------------------ skill (system-wide)
+
+def skill_context(args):
+    if args.project:
+        root = Path(args.project).expanduser().resolve()
+        base = Path(args.claude_dir).resolve() if args.claude_dir else root / ".claude"
+        scope_args = f'--project "{root}"'
+        if args.claude_dir:
+            scope_args += f' --claude-dir "{base}"'
+    else:
+        base = Path(args.claude_dir or os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser().resolve()
+        scope_args = "--user" + (f' --claude-dir "{base}"' if args.claude_dir else "")
+    py = args.python or ("python3" if shutil.which("python3") else "python")
+    skill_dir = base / "skills" / SKILL_NAME
+    tokens = {"{{PY}}": py, "{{SKILL_DIR}}": str(skill_dir), "{{CLAUDE_DIR}}": str(base), "{{SCOPE_ARGS}}": scope_args}
+    return base, skill_dir, tokens
+
+
+def skill_payload(tokens):
+    """{relative path: bytes} of everything that makes the skill self-contained."""
+    tpl = HERE / "skill" / "SKILL.md"
+    if not tpl.exists():
+        raise Fail(f"skill template not found at {tpl}")
+    files = {"SKILL.md": render(tpl.read_text(), tokens).encode(), "skill/SKILL.md": tpl.read_bytes()}
+    for name in ("install.py", "README.md"):
+        if (HERE / name).exists():
+            files[name] = (HERE / name).read_bytes()
+    for f in sorted(SRC.rglob("*")):
+        if f.is_file() and "__pycache__" not in f.parts:
+            files["src/" + f.relative_to(SRC).as_posix()] = f.read_bytes()
+    return files
+
+
+def install_skill(args):
+    base, skill_dir, tokens = skill_context(args)
+    plan = Plan(args.dry_run)
+    manifest_path = skill_dir / SKILL_MANIFEST
+    old = read_json(manifest_path) if manifest_path.exists() else {}
+    old_files = old.get("files", {})
+    print(f"{'Would install' if args.dry_run else 'Installing'} the persistent-mode skill into {skill_dir}")
+    new_files = {}
+    for rel, content in skill_payload(tokens).items():
+        digest, dest = sha(content), skill_dir / rel
+        new_files[rel] = digest
+        if not dest.exists():
+            plan.do("create", rel, lambda d=dest, c=content, r=rel: _write(d, c, r))
+        elif sha(dest.read_bytes()) == digest:
+            continue
+        elif old_files.get(rel) == sha(dest.read_bytes()) or args.force:
+            plan.do("update", rel, lambda d=dest, c=content, r=rel: _write(d, c, r))
+        else:
+            plan.warn(f"skipped {rel}: modified since install (use --force to overwrite)")
+            new_files.pop(rel)
+    manifest = {"version": VERSION, "files": {**old_files, **new_files}}
+    if manifest != old:
+        plan.do("manifest", SKILL_MANIFEST, lambda: write_json(manifest_path, manifest))
+    for line in plan.lines:
+        print(line)
+    if not plan.lines:
+        print("  already up to date")
+    for w in plan.warnings:
+        print("  WARNING:", w, file=sys.stderr)
+    if args.activate:
+        print()
+        rc = install(args)
+        return rc
+    if not args.dry_run:
+        print("\nSkill installed. It can now be used from any project: ask Claude to \"use persistent mode\", or\n"
+              "have it follow SKILL.md, which installs the hooks the first time (with your OK).\n"
+              "To install the hooks now instead: install.py --skill --activate  (or --user).")
+    return 0
+
+
+def uninstall_skill(args):
+    base, skill_dir, _ = skill_context(args)
+    plan = Plan(args.dry_run)
+    manifest_path = skill_dir / SKILL_MANIFEST
+    if not manifest_path.exists():
+        print(f"Nothing to uninstall: no {SKILL_MANIFEST} in {skill_dir}")
+        return 0
+    man = read_json(manifest_path)
+    print(f"{'Would remove' if args.dry_run else 'Removing'} the persistent-mode skill from {skill_dir}")
+    for rel, digest in man.get("files", {}).items():
+        dest = skill_dir / rel
+        if not dest.exists():
+            continue
+        if sha(dest.read_bytes()) == digest or args.force:
+            plan.do("remove", rel, dest.unlink)
+        else:
+            plan.warn(f"kept {rel}: modified since install (use --force to delete)")
+    plan.do("remove", SKILL_MANIFEST, manifest_path.unlink)
+    if not args.dry_run:
+        for d in sorted((p for p in skill_dir.rglob("*") if p.is_dir()), key=lambda p: -len(p.parts)):
+            if not any(d.iterdir()):
+                d.rmdir()
+        if skill_dir.exists() and not any(skill_dir.iterdir()):
+            skill_dir.rmdir()
+    for line in plan.lines:
+        print(line)
+    for w in plan.warnings:
+        print("  WARNING:", w, file=sys.stderr)
+    print("  (hooks and commands are separate: install.py --user --uninstall)")
+    return 0
+
+
+def check_skill(args):
+    base, skill_dir, tokens = skill_context(args)
+    problems = []
+    mp = skill_dir / SKILL_MANIFEST
+    if not mp.exists():
+        problems.append(f"no {SKILL_MANIFEST} in {skill_dir}: skill not installed")
+    else:
+        for rel, digest in read_json(mp).get("files", {}).items():
+            p = skill_dir / rel
+            if not p.exists():
+                problems.append(f"missing file {rel}")
+            elif sha(p.read_bytes()) != digest:
+                problems.append(f"modified since install: {rel} (fine if intentional)")
+        text = (skill_dir / "SKILL.md").read_text() if (skill_dir / "SKILL.md").exists() else ""
+        if not text.startswith("---\nname: " + SKILL_NAME + "\n"):
+            problems.append("SKILL.md frontmatter is missing or has the wrong name")
+        if "{{" in text:
+            problems.append("SKILL.md has unresolved template tokens")
+    hard = [p for p in problems if not p.startswith("modified since install")]
+    for p in problems:
+        print(("  problem: " if p in hard else "  note:    ") + p)
+    print("OK" if not hard else "FAILED")
+    return 1 if hard else 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     scope = ap.add_mutually_exclusive_group()
@@ -370,15 +512,25 @@ def main(argv=None):
     ap.add_argument("--uninstall", action="store_true")
     ap.add_argument("--purge", action="store_true", help="with --uninstall: also delete state and generated memory")
     ap.add_argument("--check", action="store_true", help="verify an existing installation")
+    ap.add_argument("--skill", action="store_true", help="install/uninstall/check the self-contained SKILL (default scope: user-wide)")
+    ap.add_argument("--activate", action="store_true", help="with --skill: also install the hooks and commands")
     ap.add_argument("--python", help="interpreter name to put in hook commands (default: python3)")
     ap.add_argument("--claude-dir", help="override the .claude directory (advanced/testing)")
     ap.add_argument("--version", action="version", version=VERSION)
     args = ap.parse_args(argv)
-    if not args.user and not args.project:
+    if args.skill and not args.project:
+        args.user = True                       # a skill is system-wide unless a project is named
+    elif not args.user and not args.project:
         args.project = "."
+    if args.activate and not args.skill:
+        ap.error("--activate only applies with --skill")
     if args.local and args.user:
         ap.error("--local only applies to project scope")
     try:
+        if args.skill:
+            if args.check:
+                return check_skill(args)
+            return uninstall_skill(args) if args.uninstall else install_skill(args)
         if args.check:
             return check(args)
         return uninstall(args) if args.uninstall else install(args)

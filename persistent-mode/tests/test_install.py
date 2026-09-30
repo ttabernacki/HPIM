@@ -277,6 +277,131 @@ class RealUse(Base):
         self.assertIn(persist, reason)
 
 
+class SkillInstall(Base):
+    def setUp(self):
+        super().setUp()
+        self.claude = os.path.join(self.tmp, "home", ".claude")
+        self.skill = os.path.join(self.claude, "skills", "persistent-mode")
+
+    def skill_install(self, *extra, script=INSTALL):
+        return run(["--skill", "--claude-dir", self.claude, *extra], script=script)
+
+    def md(self):
+        return read(os.path.join(self.skill, "SKILL.md"))
+
+    def test_skill_bundle_is_self_contained_and_valid(self):
+        r = self.skill_install()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for rel in ("SKILL.md", "install.py", "README.md", "skill/SKILL.md", "src/hooks/persist.py",
+                    "src/hooks/memory.py", "src/persistent/persistent_mode.md", "src/commands/persist.md",
+                    ".skill-manifest.json"):
+            self.assertTrue(os.path.exists(os.path.join(self.skill, rel)), rel)
+        md = self.md()
+        self.assertTrue(md.startswith("---\nname: persistent-mode\ndescription: "))
+        head = md.split("---\n")[1]
+        self.assertLessEqual(len(head.split("description: ", 1)[1].strip()), 1024)
+        self.assertNotIn("{{", md)
+        self.assertIn(self.skill, md)                     # absolute skill path
+        self.assertIn(self.claude, md)                    # absolute path to the hooks it installs
+        self.assertFalse(os.path.exists(os.path.join(self.claude, "settings.json")))    # hooks NOT installed yet
+        self.assertFalse(os.path.exists(os.path.join(self.claude, "hooks")))
+
+    def test_idempotent(self):
+        self.skill_install()
+        r = self.skill_install()
+        self.assertIn("already up to date", r.stdout)
+
+    def test_skill_check(self):
+        self.skill_install()
+        self.assertEqual(run(["--skill", "--claude-dir", self.claude, "--check"]).returncode, 0)
+        os.remove(os.path.join(self.skill, "src", "hooks", "persist.py"))
+        r = run(["--skill", "--claude-dir", self.claude, "--check"])
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("missing file src/hooks/persist.py", r.stdout)
+
+    def test_activate_also_installs_user_wide_hooks_and_commands(self):
+        r = self.skill_install("--activate")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        cmds = hook_commands(json.loads(read(os.path.join(self.claude, "settings.json"))))
+        self.assertEqual(len(cmds), 7)
+        self.assertTrue(all(self.claude in c for c in cmds))
+        self.assertTrue(os.path.exists(os.path.join(self.claude, "commands", "persist.md")))
+        self.assertTrue(os.path.exists(os.path.join(self.claude, "skills", "persistent-mode", "SKILL.md")))
+
+    def test_the_commands_written_in_SKILL_md_actually_work(self):
+        """SKILL.md tells Claude to run these; a rendering bug would break the skill for every user."""
+        self.skill_install()
+        check = next(l.strip() for l in self.md().splitlines() if l.strip().startswith("python3") and "--check" in l)
+        before = subprocess.run(check, shell=True, capture_output=True, text=True)
+        self.assertEqual(before.returncode, 1)                       # hooks not installed yet
+        install_cmd = next(l.strip() for l in self.md().splitlines()
+                           if l.strip().startswith("python3") and "install.py" in l and "--check" not in l)
+        self.assertEqual(subprocess.run(install_cmd, shell=True, capture_output=True, text=True).returncode, 0)
+        after = subprocess.run(check, shell=True, capture_output=True, text=True)
+        self.assertEqual(after.returncode, 0, after.stdout + after.stderr)
+        self.assertIn("OK", after.stdout)
+        on = next(l.strip() for l in self.md().splitlines() if l.strip().startswith("python3") and " on " in l)
+        env = dict(os.environ, CLAUDE_PROJECT_DIR=self.proj)
+        r = subprocess.run(on.replace("[--max-hours H] [--max-per-hour N]", "--max-hours 1"), shell=True, env=env, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("persistent mode: on", r.stdout)
+        cli_prefix = next(l.strip() for l in self.md().splitlines() if l.strip().startswith('CLI="'))
+        self.assertIn(os.path.join(self.claude, "hooks", "persist.py"), cli_prefix)
+
+    def test_bundled_installer_bootstraps_offline_from_the_skill_dir(self):
+        self.skill_install()
+        other = os.path.join(self.tmp, "other", ".claude")
+        r = run(["--user", "--claude-dir", other], script=os.path.join(self.skill, "install.py"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(hook_commands(json.loads(read(os.path.join(other, "settings.json"))))), 7)
+
+    def test_rerun_from_inside_the_skill_dir_keeps_it_intact(self):
+        self.skill_install()
+        r = self.skill_install(script=os.path.join(self.skill, "install.py"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(run(["--skill", "--claude-dir", self.claude, "--check"]).returncode, 0)
+
+    def test_edited_skill_files_are_protected_until_forced(self):
+        self.skill_install()
+        with open(os.path.join(self.skill, "README.md"), "a") as f:
+            f.write("\nmine\n")
+        pkg2 = os.path.join(self.tmp, "pkg2")
+        shutil.copytree(PKG, pkg2, ignore=shutil.ignore_patterns("tests", "__pycache__"))
+        with open(os.path.join(pkg2, "README.md"), "a") as f:
+            f.write("\nv2\n")
+        r = self.skill_install(script=os.path.join(pkg2, "install.py"))
+        self.assertIn("skipped README.md", r.stderr)
+        self.assertIn("mine", read(os.path.join(self.skill, "README.md")))
+        self.skill_install("--force", script=os.path.join(pkg2, "install.py"))
+        self.assertIn("v2", read(os.path.join(self.skill, "README.md")))
+
+    def test_uninstall_removes_the_skill_but_not_the_hooks(self):
+        self.skill_install("--activate")
+        r = run(["--skill", "--claude-dir", self.claude, "--uninstall"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(os.path.exists(self.skill))
+        self.assertEqual(len(hook_commands(json.loads(read(os.path.join(self.claude, "settings.json"))))), 7)
+
+    def test_project_scoped_skill(self):
+        r = run(["--skill", "--project", self.proj])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        md = read(os.path.join(self.proj, ".claude", "skills", "persistent-mode", "SKILL.md"))
+        self.assertIn(f'--project "{self.proj}"', md)
+        self.assertNotIn("--user", md.split("## 2.")[0])
+
+    def test_activate_requires_skill(self):
+        self.assertEqual(run(["--project", self.proj, "--activate"]).returncode, 2)
+
+    def test_project_install_warns_when_also_installed_user_wide(self):
+        home = os.path.join(self.tmp, "home")
+        env = dict(os.environ, HOME=home)
+        run(["--user"], env=env, check=True)
+        r = run(["--project", self.proj], env=env)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("ALSO installed user-wide", r.stderr)
+        self.assertNotIn("ALSO installed", run(["--project", self.proj], env=dict(os.environ, HOME=os.path.join(self.tmp, "clean"))).stderr)
+
+
 class Concurrency(Base):
     def test_parallel_cli_calls_do_not_lose_updates(self):
         self.install()

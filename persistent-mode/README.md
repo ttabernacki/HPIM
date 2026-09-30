@@ -30,6 +30,19 @@ The installer is safe to re-run and to run on a repo that already has Claude Cod
 - Uninstall removes exactly what was installed and leaves anything you modified.
 - Slash commands are named `/persist`, `/sleep`, `/dream`, `/remember`, `/forget`. If one collides with an existing command of yours, the installer skips it and tells you.
 
+### As a system-wide skill
+
+```bash
+python3 HPIM/persistent-mode/install.py --skill               # skill only: ~/.claude/skills/persistent-mode/
+python3 HPIM/persistent-mode/install.py --skill --activate    # skill + user-wide hooks and commands, one step
+```
+
+The skill is a self-contained bundle (SKILL.md, the installer, all sources), so it works offline and in every project. Ask Claude to "keep working until CI is green" or "use persistent mode" and it follows SKILL.md: it checks for the hooks, offers to install them the first time (previewing with `--dry-run` and asking you first), turns the mode on for the project, and applies the rules. Hooks load at session start, so after the first install you restart Claude Code once.
+
+- `--skill --check` verifies it; `--skill --uninstall` removes the skill (the hooks are separate: `--user --uninstall`).
+- The hooks do nothing in a project until persistent mode is turned on there, so a user-wide install is inert everywhere else.
+- Install user-wide **or** per project, not both: every hook would run twice. The installer warns when it detects this.
+
 ## Use
 
 ```
@@ -77,7 +90,7 @@ State is always per project, even with `--user`. The scripts add their generated
 ## Development
 
 ```
-python3 -m unittest discover -s persistent-mode/tests -p 'test_*.py'   # 65 tests
+python3 -m unittest discover -s persistent-mode/tests -p 'test_*.py'   # 77 tests
 ```
 
 `src/` is the source of truth. This repository installs its own copy into `.claude/` (`python3 persistent-mode/install.py --project . --force`), and a test fails if the two drift.
