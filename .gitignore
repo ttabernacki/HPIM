@@ -1,3 +1,4 @@
 .claude/persistent/state.json
 .claude/persistent/*.tmp
 __pycache__/
+.claude/memory/

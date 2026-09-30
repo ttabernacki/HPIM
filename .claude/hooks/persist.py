@@ -7,6 +7,7 @@ Hooks: persist.py hook session-start|prompt-submit|stop|guard   (JSON on stdin)
 Stdlib only. State is a single JSON file, written atomically.
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -18,6 +19,9 @@ import time
 DEFAULT_LIMITS = {"max_continuations_per_hour": 20, "max_total_hours": 12}
 MAX_INLINE_WAIT = int(os.environ.get("PERSIST_MAX_INLINE_WAIT", "170"))
 DEFAULT_NEXT_IN = 120
+WAKE_TAG = "[persistent-wake]"
+NOTICE_DEDUPE_S = 3600     # identical notification suppressed for this long
+NOTICE_MIN_GAP_S = 600     # autonomous continuations: at most one notification per gap
 
 
 # --------------------------------------------------------------- state
@@ -37,7 +41,8 @@ def prompt_path():
 def fresh_state():
     return {"mode": "off", "autonomous": False, "started_at": None,
             "limits": dict(DEFAULT_LIMITS), "continuations": [],
-            "next_id": 1, "followups": []}
+            "next_id": 1, "followups": [],
+            "wake_for": None, "notices": []}
 
 
 def load():
@@ -211,8 +216,18 @@ def hook_session_start(_evt):
     print("\n".join(out))
 
 
-def hook_prompt_submit(_evt):
+def hook_prompt_submit(evt):
     st = load()
+    prompt = (evt.get("prompt") or "").lstrip()
+    if prompt.startswith(WAKE_TAG) and st["mode"] == "on" and active(st):
+        # A scheduled wake is not a user request: stay autonomous (guard on).
+        st["autonomous"], st["wake_for"] = True, None
+        save(st)
+        now = time.time()
+        print("Persistent mode wake. Registered follow-ups:\n"
+              + "\n".join(fmt_followup(f, now) for f in active(st))
+              + "\nCheck what is due (safe, non-mutating only), then update/done.")
+        return
     if st["autonomous"]:
         st["autonomous"] = False
         save(st)
@@ -243,11 +258,23 @@ def hook_stop(_evt):
     nxt = min(f["next_check_at"] for f in act)
     wait = nxt - now
     if wait > MAX_INLINE_WAIT:
-        # Too far out to wait inside the hook; a scheduled wake must resume this.
-        st["autonomous"] = False
+        if st.get("wake_for") == nxt:
+            # Wake already requested for this exact check time: let the turn end.
+            st["autonomous"] = False
+            save(st)
+            return
+        st["wake_for"] = nxt
+        st["autonomous"] = True
+        st["continuations"].append(now)
         save(st)
-        emit({"systemMessage": f"persistent mode: next check in {int(wait)}s; "
-                               "stopping until a scheduled wake or new prompt"})
+        secs = int(wait) + 5
+        emit({"decision": "block", "reason":
+              f"Persistent mode: the next check is {int(wait)}s away. Schedule a wake, "
+              f"then end your turn without further output. Use ScheduleWakeup "
+              f"(delaySeconds={secs}), or else a one-shot CronCreate (recurring=false) "
+              f"about {secs}s from now, or else send_later (delay_minutes="
+              f"{max(1, -(-secs // 60))}), with the prompt exactly: "
+              f"\"{WAKE_TAG} check due follow-ups\"."})
         return
     if wait > 0:
         time.sleep(wait)
@@ -274,7 +301,7 @@ def hook_stop(_evt):
 
 ALWAYS_ALLOW = {"Read", "Grep", "Glob", "WebFetch", "WebSearch", "ToolSearch",
                 "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "ScheduleWakeup",
-                "PushNotification", "CronList", "ListMcpResourcesTool",
+                "CronList", "ListMcpResourcesTool",
                 "ReadMcpResourceTool", "ReadMcpResourceDirTool"}
 READ_VERBS = ("get", "list", "search", "read", "fetch", "query", "lookup", "find")
 WRITE_VERBS = ("create", "update", "delete", "send", "write", "push", "merge",
@@ -359,19 +386,56 @@ def guard_decision(evt):
     return False
 
 
+def norm_msg(msg):
+    return hashlib.sha1(re.sub(r"\s+", " ", msg.strip().lower()).encode()).hexdigest()
+
+
+def notice_check(st, msg):
+    """Return a deny reason for a redundant PushNotification, else None (and record it)."""
+    now = time.time()
+    st["notices"] = [n for n in st["notices"] if now - n["t"] < 86400]
+    h = norm_msg(msg)
+    if any(n["h"] == h and now - n["t"] < NOTICE_DEDUPE_S for n in st["notices"]):
+        return "Duplicate notification already sent recently; do not repeat it."
+    if st["autonomous"] and st["notices"] and now - st["notices"][-1]["t"] < NOTICE_MIN_GAP_S:
+        return ("Autonomous continuations notify sparingly: a notification was sent "
+                "recently. Stay quiet unless this is a blocker, and then wait.")
+    st["notices"].append({"h": h, "t": now})
+    save(st)
+    return None
+
+
+WAKE_TOOLS_OK = {"mcp__Claude_Code_Remote__send_later"}
+
+
+def deny(reason):
+    emit({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                 "permissionDecision": "deny",
+                                 "permissionDecisionReason": reason}})
+
+
 def hook_guard(evt):
     st = load()
-    if st["mode"] != "on" or not st["autonomous"]:
+    if st["mode"] != "on":
         return
-    if guard_decision(evt):
+    tool = evt.get("tool_name", "")
+    if tool == "PushNotification":
+        reason = notice_check(st, (evt.get("tool_input") or {}).get("message", ""))
+        if reason:
+            deny("Persistent mode: " + reason)
         return
-    emit({"hookSpecificOutput": {
-        "hookEventName": "PreToolUse",
-        "permissionDecision": "deny",
-        "permissionDecisionReason":
-            "Persistent mode: this autonomous continuation may only use safe, "
-            "non-mutating tools. Do not run it. Describe the proposed action to "
-            "the user and wait for approval."}})
+    if not st["autonomous"]:
+        return
+    if tool in WAKE_TOOLS_OK:
+        return
+    if tool == "CronCreate":
+        if (evt.get("tool_input") or {}).get("recurring") is False:
+            return  # one-shot wake only
+    elif guard_decision(evt):
+        return
+    deny("Persistent mode: this autonomous continuation may only use safe, "
+         "non-mutating tools. Do not run it. Describe the proposed action to "
+         "the user and wait for approval.")
 
 
 HOOKS = {"session-start": hook_session_start, "prompt-submit": hook_prompt_submit,

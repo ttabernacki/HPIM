@@ -24,4 +24,6 @@ State lives in `.claude/persistent/state.json`, managed only through the CLI:
     python3 .claude/hooks/persist.py cancel <id>
     python3 .claude/hooks/persist.py status
 
+Long waits: when the next check is more than a few minutes out, the harness will ask you once to schedule a wake (ScheduleWakeup, else a one-shot CronCreate, else send_later) with the prompt `[persistent-wake] check due follow-ups`. Do exactly that, then end your turn silently. A prompt starting with `[persistent-wake]` is a scheduled wake, not the user: keep working autonomously and read-only.
+
 Every check must end with `update` (new observation and next check) or `done`. An `update` that changes nothing still resets the next-check timer; do not skip it, or the same check comes back immediately.

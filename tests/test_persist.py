@@ -66,12 +66,22 @@ class StopHook(Base):
         self.assertGreaterEqual(time.time() - t, 0.9)
         self.assertEqual(out["decision"], "block")
 
-    def test_long_wait_allows_stop(self):
+    def test_long_wait_requests_wake_once_then_allows_stop(self):
         self.cli("on")
         self.add(next_in=600)
         out = self.hook("stop")
-        self.assertNotIn("decision", out)
+        self.assertEqual(out["decision"], "block")
+        self.assertIn("[persistent-wake]", out["reason"])
+        self.assertIn("ScheduleWakeup", out["reason"])
+        self.assertEqual(self.hook("stop"), "")  # wake already requested
         self.assertFalse(self.state()["autonomous"])
+
+    def test_update_after_wake_request_requests_again(self):
+        self.cli("on")
+        self.add(next_in=600)
+        self.hook("stop")
+        self.cli("update", "1", "--state", "pending", "--next-in", "900")
+        self.assertEqual(self.hook("stop")["decision"], "block")
 
     def test_done_ends_loop(self):
         self.cli("on")
@@ -84,7 +94,7 @@ class StopHook(Base):
         self.add()
         self.cli("update", "1", "--state", "still pending", "--next-in", "600")
         out = self.hook("stop")
-        self.assertNotIn("decision", out)
+        self.assertIn("next check is", out["reason"])  # not treated as due
 
     def test_sleep_stops_blocking(self):
         self.cli("on")
@@ -170,6 +180,68 @@ class Guard(Base):
         self.assertTrue(self.deny("mcp__Gmail__send_message"))
         self.assertTrue(self.deny("mcp__Notion__notion-update-page"))
         self.assertTrue(self.deny("mcp__Foo__frobnicate"))
+
+
+class Wake(Base):
+    def test_wake_prompt_stays_autonomous_and_injects_followups(self):
+        self.cli("on")
+        self.add(next_in=600)
+        out = self.hook("prompt-submit", {"prompt": "[persistent-wake] check due follow-ups"})
+        self.assertIn("deploy X", out)
+        st = self.state()
+        self.assertTrue(st["autonomous"])
+        self.assertIsNone(st["wake_for"])
+
+    def test_real_prompt_clears_autonomous(self):
+        self.cli("on")
+        self.add()
+        self.hook("stop")
+        self.hook("prompt-submit", {"prompt": "hello"})
+        self.assertFalse(self.state()["autonomous"])
+
+    def test_wake_prompt_ignored_when_no_active_followup(self):
+        self.cli("on")
+        self.hook("prompt-submit", {"prompt": "[persistent-wake] x"})
+        self.assertFalse(self.state()["autonomous"])
+
+    def test_wake_tools_allowed_only_one_shot(self):
+        self.cli("on")
+        self.add()
+        self.hook("stop")
+        g = lambda t, **i: self.hook("guard", {"tool_name": t, "tool_input": i})
+        self.assertEqual(g("CronCreate", cron="30 14 1 1 *", prompt="x", recurring=False), "")
+        self.assertEqual(g("mcp__Claude_Code_Remote__send_later", message="x"), "")
+        self.assertEqual(g("ScheduleWakeup", delaySeconds=60), "")
+        self.assertIn("hookSpecificOutput", g("CronCreate", cron="*/5 * * * *", prompt="x"))
+
+
+class Notify(Base):
+    def push(self, msg):
+        return self.hook("guard", {"tool_name": "PushNotification",
+                                   "tool_input": {"message": msg, "status": "proactive"}})
+
+    def test_duplicate_suppressed_case_and_space_insensitive(self):
+        self.cli("on")
+        self.assertEqual(self.push("Deploy X healthy"), "")
+        out = self.push("  deploy   x HEALTHY ")
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_distinct_message_allowed_outside_autonomous(self):
+        self.cli("on")
+        self.assertEqual(self.push("a"), "")
+        self.assertEqual(self.push("b"), "")
+
+    def test_autonomous_min_gap(self):
+        self.cli("on")
+        self.add()
+        self.hook("stop")
+        self.assertEqual(self.push("a"), "")
+        out = self.push("b")
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_inactive_when_off(self):
+        self.assertEqual(self.push("a"), "")
+        self.assertEqual(self.push("a"), "")
 
 
 class SessionStart(Base):
