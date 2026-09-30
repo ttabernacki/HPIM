@@ -8,15 +8,13 @@ import time
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRIPT = os.path.join(ROOT, ".claude", "hooks", "persist.py")
+SCRIPT = os.path.join(ROOT, "src", "hooks", "persist.py")
 
 
 class Base(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
         os.makedirs(os.path.join(self.dir, ".claude", "persistent"))
-        shutil.copy(os.path.join(ROOT, ".claude", "persistent", "persistent_mode.md"),
-                    os.path.join(self.dir, ".claude", "persistent"))
         self.env = dict(os.environ, CLAUDE_PROJECT_DIR=self.dir, PERSIST_MAX_INLINE_WAIT="3")
 
     def tearDown(self):

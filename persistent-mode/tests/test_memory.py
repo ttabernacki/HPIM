@@ -8,8 +8,8 @@ import time
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRIPT = os.path.join(ROOT, ".claude", "hooks", "memory.py")
-sys.path.insert(0, os.path.join(ROOT, ".claude", "hooks"))
+SCRIPT = os.path.join(ROOT, "src", "hooks", "memory.py")
+sys.path.insert(0, os.path.join(ROOT, "src", "hooks"))
 import memory  # noqa: E402
 
 def wr(path, text):

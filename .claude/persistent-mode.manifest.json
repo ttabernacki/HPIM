@@ -1,0 +1,25 @@
+{
+  "version": "1.0.0",
+  "scope": "project",
+  "memory": true,
+  "files": {
+    "hooks/persist.py": "dc5dd3d1c4e2546e774e29739d59a711a823cb25330b82055c3e9fada67618b2",
+    "persistent/persistent_mode.md": "ecc8093430ce9721ca4e4e8cc56b48e4c1c7c5c5f0320f4151c8d519875e3608",
+    "commands/persist.md": "52de7e3c8ec330b36f0329dc02dec01e623b015cfa53e2eb018db209d6101d90",
+    "commands/sleep.md": "cfd5faef1883d7c44794a8d21e5789d2909ff59c7b755d5d5ff50a992414753e",
+    "hooks/memory.py": "1825cae54fc0313b3385b542d98804563e724ab68bc70af2f776c64b7c6dc66d",
+    "commands/dream.md": "ba46824cf6dc06724458eead73fc66487e7a3d21a98c52cc8ea05d8da58b43f4",
+    "commands/remember.md": "46a7d0ef83f931bb403ed5cac5a51e3345f3a6943513bbd23f56ad2f21cc4fc2",
+    "commands/forget.md": "fc84c2e9c2caa5eb2b976eb191ab105fc127872f2db43de5c6d97c36235005ef",
+    "agents/memory-writer.md": "a17de1d0a3922127f99e8f877aaec418e3b754e1da086c9822426996a4d9acad",
+    "agents/memory-consolidator.md": "cf51acb62769ed6bd30e75b45bd3b1c8b7eae4479e7475f226b9a308e811e32a"
+  },
+  "hooks": [
+    "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/memory.py\" hook session-start",
+    "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/memory.py\" hook touch",
+    "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/persist.py\" hook guard",
+    "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/persist.py\" hook prompt-submit",
+    "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/persist.py\" hook session-start",
+    "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/persist.py\" hook stop"
+  ]
+}
