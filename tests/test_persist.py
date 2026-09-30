@@ -102,6 +102,12 @@ class StopHook(Base):
         self.cli("sleep")
         self.assertEqual(self.hook("stop"), "")
 
+    def test_on_resets_limits_to_defaults(self):
+        self.cli("on", "--max-per-hour", "1", "--max-hours", "1")
+        self.cli("on", "--max-hours", "2")
+        self.assertEqual(self.state()["limits"],
+                         {"max_continuations_per_hour": 20, "max_total_hours": 2.0})
+
     def test_hourly_cap(self):
         self.cli("on", "--max-per-hour", "2")
         self.add()

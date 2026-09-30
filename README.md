@@ -42,6 +42,10 @@ Capture is cheap and mechanical; distillation is model-driven and on demand.
 
 Memory lives in `.claude/memory/` (its own git repo, ignored by this one). It is plain files: read, diff, edit, or delete anything.
 
+## Demo: Echo Snake
+
+`snake/index.html` is a single-file snake variant built with persistent mode on. Mechanic: your own past replays behind you as a deadly *echo*. Each food shrinks the echo's delay (24 down to 10 ticks), Space *blinks* you onto the echo's head (1 charge, +1 per 4 foods, max 3). Open the file in a browser. Playtest: `NODE_PATH=$(npm root -g) node tests/e2e_snake.js` (headless Chromium, 15 checks).
+
 ## Known limits
 
 - Hooks load at session start; restart Claude Code after cloning. The hook logic is unit-tested and the memory pipeline was run end to end once with real subagents, but persistent mode has not been exercised inside a long-running interactive session.

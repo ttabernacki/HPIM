@@ -88,6 +88,7 @@ def cmd_on(a):
     st["autonomous"] = False
     st["started_at"] = time.time()
     st["continuations"] = []
+    st["limits"] = dict(DEFAULT_LIMITS)  # limits never carry over from an earlier run
     if a.max_per_hour:
         st["limits"]["max_continuations_per_hour"] = a.max_per_hour
     if a.max_hours:
